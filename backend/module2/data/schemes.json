@@ -1,0 +1,179 @@
+
+    [
+  {
+    "scheme_code": "PMMY",
+    "scheme_name": "Pradhan Mantri Mudra Yojana",
+    "scheme_type": "Micro Enterprise Credit",
+    "description": "Credit support for micro enterprises through Shishu, Kishor, Tarun and Tarun Plus categories.",
+    "target_beneficiary": "Micro enterprises and eligible borrowers seeking business credit.",
+    "rules": [
+      {
+        "scheme_code": "PMMY",
+        "minimum_project_cost": null,
+        "maximum_project_cost": null,
+        "maximum_loan_amount": 2000000,
+        "beneficiary_contribution_rate": null,
+        "bank_financing_rate": null,
+        "subsidy_rate": null,
+        "maximum_subsidy_amount": null,
+        "annual_interest_rate": null,
+        "tenure_months": null,
+        "moratorium_months": null,
+        "loan_categories": [
+          {
+            "category_name": "Shishu",
+            "minimum_loan_amount": 0,
+            "maximum_loan_amount": 50000,
+            "description": "Loans up to ₹50,000."
+          },
+          {
+            "category_name": "Kishor",
+            "minimum_loan_amount": 50001,
+            "maximum_loan_amount": 500000,
+            "description": "Loans above ₹50,000 and up to ₹5 lakh."
+          },
+          {
+            "category_name": "Tarun",
+            "minimum_loan_amount": 500001,
+            "maximum_loan_amount": 1000000,
+            "description": "Loans above ₹5 lakh and up to ₹10 lakh."
+          },
+          {
+            "category_name": "Tarun Plus",
+            "minimum_loan_amount": 1000001,
+            "maximum_loan_amount": 2000000,
+            "description": "Loans above ₹10 lakh and up to ₹20 lakh for eligible borrowers who have successfully repaid a previous Tarun loan."
+          }
+        ],
+        "financing_conditions": [],
+        "eligibility_conditions": [
+          "Applicant must satisfy the applicable lender and PMMY eligibility requirements.",
+          "Tarun Plus is intended for eligible borrowers who have successfully repaid a previous Tarun category loan."
+        ],
+        "source_name": "MUDRA Official Website",
+        "source_url": "https://www.mudra.org.in/offerings",
+        "effective_from": "2024-10-24",
+        "effective_to": null,
+        "version": "PMMY-current",
+        "is_active": true
+      }
+    ]
+  },
+  {
+    "scheme_code": "PMEGP",
+    "scheme_name": "Prime Minister's Employment Generation Programme",
+    "scheme_type": "Credit Linked Subsidy Programme",
+    "description": "Credit-linked subsidy programme for setting up new micro enterprises in the non-farm sector.",
+    "target_beneficiary": "Eligible individuals and other permitted beneficiaries establishing new viable micro enterprises.",
+    "rules": [
+      {
+        "scheme_code": "PMEGP",
+        "minimum_project_cost": null,
+        "maximum_project_cost": null,
+        "maximum_loan_amount": null,
+        "beneficiary_contribution_rate": null,
+        "bank_financing_rate": null,
+        "subsidy_rate": null,
+        "maximum_subsidy_amount": null,
+        "annual_interest_rate": null,
+        "tenure_months": null,
+        "moratorium_months": null,
+        "loan_categories": [],
+        "financing_conditions": [
+          {
+            "condition_code": "GENERAL_RURAL",
+            "description": "General category beneficiary with project located in a rural area.",
+            "beneficiary_category": "general",
+            "location_type": "rural",
+            "business_sector": null,
+            "loan_category": null,
+            "beneficiary_contribution_rate": 0.1,
+            "bank_financing_rate": 0.9,
+            "subsidy_rate": 0.25,
+            "maximum_project_cost": null,
+            "maximum_loan_amount": null
+          },
+          {
+            "condition_code": "GENERAL_URBAN",
+            "description": "General category beneficiary with project located in an urban area.",
+            "beneficiary_category": "general",
+            "location_type": "urban",
+            "business_sector": null,
+            "loan_category": null,
+            "beneficiary_contribution_rate": 0.1,
+            "bank_financing_rate": 0.9,
+            "subsidy_rate": 0.15,
+            "maximum_project_cost": null,
+            "maximum_loan_amount": null
+          },
+          {
+            "condition_code": "SPECIAL_RURAL",
+            "description": "Special category beneficiary with project located in a rural area.",
+            "beneficiary_category": "special",
+            "location_type": "rural",
+            "business_sector": null,
+            "loan_category": null,
+            "beneficiary_contribution_rate": 0.05,
+            "bank_financing_rate": 0.95,
+            "subsidy_rate": 0.35,
+            "maximum_project_cost": null,
+            "maximum_loan_amount": null
+          },
+          {
+            "condition_code": "SPECIAL_URBAN",
+            "description": "Special category beneficiary with project located in an urban area.",
+            "beneficiary_category": "special",
+            "location_type": "urban",
+            "business_sector": null,
+            "loan_category": null,
+            "beneficiary_contribution_rate": 0.05,
+            "bank_financing_rate": 0.95,
+            "subsidy_rate": 0.25,
+            "maximum_project_cost": null,
+            "maximum_loan_amount": null
+          },
+          {
+            "condition_code": "MANUFACTURING",
+            "description": "New manufacturing project eligible for PMEGP margin money subsidy up to the applicable project-cost ceiling.",
+            "beneficiary_category": null,
+            "location_type": null,
+            "business_sector": "manufacturing",
+            "loan_category": null,
+            "beneficiary_contribution_rate": null,
+            "bank_financing_rate": null,
+            "subsidy_rate": null,
+            "maximum_project_cost": 5000000,
+            "maximum_loan_amount": null
+          },
+          {
+            "condition_code": "BUSINESS_SERVICE",
+            "description": "New business or service project eligible for PMEGP margin money subsidy up to the applicable project-cost ceiling.",
+            "beneficiary_category": null,
+            "location_type": null,
+            "business_sector": "business_service",
+            "loan_category": null,
+            "beneficiary_contribution_rate": null,
+            "bank_financing_rate": null,
+            "subsidy_rate": null,
+            "maximum_project_cost": 2000000,
+            "maximum_loan_amount": null
+          }
+        ],
+        "eligibility_conditions": [
+          "Applicant must be above 18 years of age.",
+          "There is no income ceiling for assistance for setting up projects under PMEGP.",
+          "Assistance for new enterprises is available only for new projects sanctioned specifically under PMEGP.",
+          "For projects above Rs. 10 lakh in manufacturing or above Rs. 5 lakh in business/service, the beneficiary should possess at least VIII standard pass educational qualification.",
+          "Only one person from one family is eligible for assistance for setting up a new enterprise.",
+          "Projects without capital expenditure are not eligible for financing under the scheme."
+        ],
+        "source_name": "PMEGP Official Portal / Ministry of MSME",
+        "source_url": "https://pmegp.msme.gov.in/",
+        "effective_from": "2023-12-07",
+        "effective_to": null,
+        "version": "PMEGP-revised-guidelines-2023",
+        "is_active": true
+      }
+    ]
+  }
+]
