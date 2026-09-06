@@ -36,7 +36,7 @@ def match_pmmy(
     tarun_plus_eligible: bool = False,
 ) -> dict[str, Any] | None:
     """
-    Match a requested loan amount with the appropriate PMMY category.
+    Match the requested loan amount with the correct PMMY category.
     """
 
     scheme = get_scheme_by_code("PMMY")
@@ -50,6 +50,7 @@ def match_pmmy(
     for category in categories:
         category_name = category["category_name"]
 
+        # Tarun Plus has an additional eligibility condition.
         if category_name == "Tarun Plus" and not tarun_plus_eligible:
             continue
 
@@ -77,13 +78,22 @@ def match_pmmy(
 
 
 def match_pmegp(
+    requested_loan_amount: float,
     beneficiary_category: str,
     location_type: str,
     business_sector: str,
 ) -> dict[str, Any] | None:
     """
-    Match PMEGP based on beneficiary category,
-    location and business sector.
+    Match PMEGP using:
+
+    1. Requested loan amount
+    2. Beneficiary category
+    3. Location type
+    4. Business sector
+
+    PMEGP's maximum project-cost limit is converted into the
+    maximum possible bank-financed loan using the applicable
+    bank-financing rate.
     """
 
     scheme = get_scheme_by_code("PMEGP")
@@ -101,7 +111,9 @@ def match_pmegp(
     category_condition = None
     sector_condition = None
 
-    # Find beneficiary + location condition
+    # ---------------------------------------------------------
+    # Find beneficiary + location financing condition
+    # ---------------------------------------------------------
     for condition in conditions:
         condition_category = normalize(
             condition.get("beneficiary_category")
@@ -117,7 +129,9 @@ def match_pmegp(
             category_condition = condition
             break
 
-    # Find business sector condition
+    # ---------------------------------------------------------
+    # Find business-sector condition
+    # ---------------------------------------------------------
     for condition in conditions:
         condition_sector = normalize(
             condition.get("business_sector")
@@ -127,6 +141,7 @@ def match_pmegp(
             sector_condition = condition
             break
 
+    # Both conditions are required.
     if not category_condition or not sector_condition:
         return None
 
@@ -144,6 +159,29 @@ def match_pmegp(
         "maximum_project_cost"
     )
 
+    # We cannot determine amount eligibility without these values.
+    if (
+        contribution_rate is None
+        or bank_financing_rate is None
+        or project_cost_limit is None
+    ):
+        return None
+
+    # ---------------------------------------------------------
+    # Convert PMEGP project-cost ceiling into maximum loan
+    # ---------------------------------------------------------
+    maximum_loan_amount = (
+        project_cost_limit * bank_financing_rate
+    )
+
+    # ---------------------------------------------------------
+    # IMPORTANT:
+    # Requested loan must fit within the scheme's
+    # financing capacity.
+    # ---------------------------------------------------------
+    if requested_loan_amount > maximum_loan_amount:
+        return None
+
     return {
         "scheme_code": scheme["scheme_code"],
         "scheme_name": scheme["scheme_name"],
@@ -151,14 +189,16 @@ def match_pmegp(
         "beneficiary_category": beneficiary_category,
         "location_type": location_type,
         "business_sector": business_sector,
+        "requested_loan_amount": requested_loan_amount,
         "contribution_rate": contribution_rate,
         "bank_financing_rate": bank_financing_rate,
         "subsidy_rate": subsidy_rate,
         "maximum_project_cost": project_cost_limit,
+        "maximum_loan_amount": maximum_loan_amount,
         "interest_rate": rule.get("annual_interest_rate"),
         "tenure_months": rule.get("tenure_months"),
         "message": (
-            "PMEGP conditions matched based on "
+            "PMEGP matched based on requested loan amount, "
             "beneficiary category, location and business sector."
         ),
     }
@@ -172,11 +212,15 @@ def match_schemes(
     tarun_plus_eligible: bool = False,
 ) -> dict[str, Any]:
     """
-    Match the user's input against PMMY and PMEGP.
+    Dynamically match the user's requested loan amount
+    against the currently implemented government schemes.
     """
 
     matches = []
 
+    # ---------------------------------------------------------
+    # PMMY
+    # ---------------------------------------------------------
     pmmy_match = match_pmmy(
         requested_loan_amount=requested_loan_amount,
         tarun_plus_eligible=tarun_plus_eligible,
@@ -185,7 +229,11 @@ def match_schemes(
     if pmmy_match:
         matches.append(pmmy_match)
 
+    # ---------------------------------------------------------
+    # PMEGP
+    # ---------------------------------------------------------
     pmegp_match = match_pmegp(
+        requested_loan_amount=requested_loan_amount,
         beneficiary_category=beneficiary_category,
         location_type=location_type,
         business_sector=business_sector,

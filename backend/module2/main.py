@@ -3,6 +3,8 @@ from fastapi import FastAPI
 from routes.financial import router as financial_router
 from routes.repayment import router as repayment_router
 from routes.schemes import router as schemes_router
+from routes.integration import router as integration_router
+
 
 app = FastAPI(
     title="AI Hyper-Local Business Advisory - Module 2",
@@ -12,6 +14,7 @@ app = FastAPI(
 app.include_router(financial_router)
 app.include_router(repayment_router)
 app.include_router(schemes_router)
+app.include_router(integration_router)
 
 
 @app.get("/")

@@ -28,12 +28,9 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class FinancialCalculationInput(BaseModel):
-    selected_scheme: Optional[str] = Field(
-        default=None,
-        description=(
-            "Scheme code selected by the user, for example PMMY or PMEGP."
-        ),
-    )
+    selected_scheme: Optional[str] = Field(default=None)
+    requested_loan_amount: Optional[float] = Field(default=None, gt=0)
+    available_margin: float = Field(..., gt=0)
 
     available_margin: float = Field(
         ...,

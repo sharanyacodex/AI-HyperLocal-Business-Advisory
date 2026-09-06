@@ -11,42 +11,54 @@ def calculate_emi(
     annual_interest_rate_percent: float,
     tenure_months: int,
 ) -> float:
+    """
+    Calculate monthly EMI using the reducing-balance formula.
+
+    annual_interest_rate_percent is expressed as a percentage.
+    Example: 8 means 8% annual interest.
+    """
 
     if principal <= 0:
         return 0.0
 
+    if tenure_months <= 0:
+        raise ValueError("tenure_months must be greater than 0.")
+
     if annual_interest_rate_percent == 0:
         return principal / tenure_months
 
-    monthly_rate = annual_interest_rate_percent / 12 / 100
-
-    growth_factor = (1 + monthly_rate) ** tenure_months
+    monthly_rate = annual_interest_rate_percent / 100 / 12
 
     emi = (
         principal
         * monthly_rate
-        * growth_factor
-        / (growth_factor - 1)
+        * (1 + monthly_rate) ** tenure_months
+        / ((1 + monthly_rate) ** tenure_months - 1)
     )
 
     return emi
 
 
-def classify_stress_level(dscr):
+def classify_stress_level(dscr: float | None) -> str:
+    """
+    Application-level repayment stress classification.
+
+    This is NOT a banking standard.
+    """
+
     if dscr is None:
         return "not_applicable"
 
     if dscr > 1.5:
         return "healthy"
 
-    elif 1.2 <= dscr <= 1.5:
+    if dscr >= 1.2:
         return "watch"
 
-    elif 1.0 <= dscr < 1.2:
+    if dscr >= 1.0:
         return "high_stress"
 
-    else:
-        return "very_high_stress"
+    return "very_high_stress"
 
 
 def calculate_financials(
@@ -54,7 +66,7 @@ def calculate_financials(
 ) -> FinancialCalculationResponse:
 
     # ---------------------------------------------------------
-    # Step A: Theoretical project capacity
+    # STEP 1: Maximum project capacity
     # ---------------------------------------------------------
 
     theoretical_project_capacity = (
@@ -62,80 +74,123 @@ def calculate_financials(
     )
 
     # ---------------------------------------------------------
-    # Step B: Final project cost
+    # STEP 2: Maximum affordable loan
     # ---------------------------------------------------------
 
-    final_project_cost = min(
-        theoretical_project_capacity,
-        data.project_cost_limit,
+    maximum_affordable_loan = (
+        theoretical_project_capacity
+        * (1 - data.contribution_rate)
     )
 
     # ---------------------------------------------------------
-    # Step C: Beneficiary contribution
+    # STEP 3: Determine final project and loan amount
     # ---------------------------------------------------------
 
-    beneficiary_contribution = (
-        final_project_cost * data.contribution_rate
-    )
+    if data.requested_loan_amount is not None:
 
-    # ---------------------------------------------------------
-    # Step D: Final project cost and loan amount
-    # ---------------------------------------------------------
+        requested_loan = data.requested_loan_amount
 
-    raw_loan_amount = (
-        final_project_cost - beneficiary_contribution
-    )
+        # Bank financing percentage
+        bank_financing_rate = 1 - data.contribution_rate
 
-    if (
-        data.loan_limit is not None
-        and raw_loan_amount > data.loan_limit
-    ):
+        # Required project cost for requested loan
+        requested_project_cost = (
+            requested_loan / bank_financing_rate
+        )
+
+        # Required beneficiary contribution
+        required_contribution = (
+            requested_project_cost
+            * data.contribution_rate
+        )
+
+        # Check available margin
+        if required_contribution > data.available_margin:
+            raise ValueError(
+                "Requested loan amount exceeds the beneficiary's "
+                "available margin."
+            )
+
+        # Check project-cost limit
+        if requested_project_cost > data.project_cost_limit:
+            raise ValueError(
+                "Requested loan amount exceeds the scheme's "
+                "project cost limit."
+            )
+
+        # Check loan limit
+        if (
+            data.loan_limit is not None
+            and requested_loan > data.loan_limit
+        ):
+            raise ValueError(
+                "Requested loan amount exceeds the scheme's "
+                "loan limit."
+            )
+
+        final_project_cost = requested_project_cost
+        beneficiary_contribution = required_contribution
+        loan_amount = requested_loan
+
+    else:
+
+        # No requested loan:
+        # calculate maximum possible project size.
 
         final_project_cost = min(
-            final_project_cost,
-            data.loan_limit / (1 - data.contribution_rate),
+            theoretical_project_capacity,
+            data.project_cost_limit,
         )
 
         beneficiary_contribution = (
-            final_project_cost * data.contribution_rate
+            final_project_cost
+            * data.contribution_rate
         )
 
         loan_amount = (
-            final_project_cost - beneficiary_contribution
+            final_project_cost
+            - beneficiary_contribution
         )
 
-    else:
-        loan_amount = max(0.0, raw_loan_amount)
+        # Apply loan limit if available
+        if (
+            data.loan_limit is not None
+            and loan_amount > data.loan_limit
+        ):
+            loan_amount = data.loan_limit
+
+            final_project_cost = (
+                loan_amount
+                / (1 - data.contribution_rate)
+            )
+
+            beneficiary_contribution = (
+                final_project_cost
+                * data.contribution_rate
+            )
 
     # ---------------------------------------------------------
-    # Step E: EMI
+    # STEP 4: EMI
     # ---------------------------------------------------------
+
+    emi = None
+    total_interest = None
 
     if (
         data.interest_rate is not None
         and data.tenure_months is not None
     ):
-
         emi = calculate_emi(
             principal=loan_amount,
             annual_interest_rate_percent=data.interest_rate,
             tenure_months=data.tenure_months,
         )
 
-        # -----------------------------------------------------
-        # Step F: Total interest
-        # -----------------------------------------------------
-
-        total_interest = (
-            emi * data.tenure_months
-        ) - loan_amount
-
-    else:
-        emi = None
-        total_interest = None
+        total_payment = emi * data.tenure_months
+        total_interest = total_payment - loan_amount
 
     # ---------------------------------------------------------
-    # Step G: Operating surplus
+    # STEP 5: Operating surplus
     # ---------------------------------------------------------
 
     operating_surplus = (
@@ -144,26 +199,23 @@ def calculate_financials(
     )
 
     # ---------------------------------------------------------
-    # Step H: DSCR
+    # STEP 6: DSCR
     # ---------------------------------------------------------
 
-    if emi is None or emi == 0:
-        dscr = None
-    else:
+    dscr = None
+
+    if emi is not None and emi > 0:
         dscr = operating_surplus / emi
-
-    # ---------------------------------------------------------
-    # Step I: Stress classification
-    # ---------------------------------------------------------
 
     stress_level = classify_stress_level(dscr)
 
     # ---------------------------------------------------------
-    # Financial summary
+    # STEP 7: Response
     # ---------------------------------------------------------
 
     financial_summary = FinancialSummary(
         theoretical_project_capacity=theoretical_project_capacity,
+        maximum_affordable_loan=maximum_affordable_loan,
         final_project_cost=final_project_cost,
         beneficiary_contribution=beneficiary_contribution,
         loan_amount=loan_amount,
@@ -173,10 +225,6 @@ def calculate_financials(
         total_interest=total_interest,
     )
 
-    # ---------------------------------------------------------
-    # Repayment summary
-    # ---------------------------------------------------------
-
     repayment = RepaymentSummary(
         monthly_revenue=data.monthly_revenue,
         monthly_operating_cost=data.monthly_operating_cost,
@@ -184,10 +232,6 @@ def calculate_financials(
         dscr=dscr,
         stress_level=stress_level,
     )
-
-    # ---------------------------------------------------------
-    # Final response
-    # ---------------------------------------------------------
 
     return FinancialCalculationResponse(
         success=True,
