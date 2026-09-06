@@ -1,0 +1,319 @@
+@import "tailwindcss";
+/* =========================================================
+   STARTUP UI ANIMATIONS
+========================================================= */
+
+/* Header floating animation */
+@keyframes headerFloat {
+  0% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-5px);
+  }
+
+  100% {
+    transform: translateY(0px);
+  }
+}
+
+/* Header glow */
+@keyframes headerGlow {
+  0% {
+    opacity: 0.35;
+    transform: scale(0.95);
+  }
+
+  50% {
+    opacity: 0.7;
+    transform: scale(1.05);
+  }
+
+  100% {
+    opacity: 0.35;
+    transform: scale(0.95);
+  }
+}
+
+/* Score glow */
+@keyframes scoreGlow {
+  0% {
+    box-shadow:
+      0 0 0 rgba(124, 58, 237, 0.1),
+      0 0 25px rgba(124, 58, 237, 0.15);
+  }
+
+  50% {
+    box-shadow:
+      0 0 20px rgba(124, 58, 237, 0.25),
+      0 0 55px rgba(37, 99, 235, 0.2);
+  }
+
+  100% {
+    box-shadow:
+      0 0 0 rgba(124, 58, 237, 0.1),
+      0 0 25px rgba(124, 58, 237, 0.15);
+  }
+}
+
+/* Score circle */
+@keyframes scoreAppear {
+  0% {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Header class */
+.startup-header {
+  position: relative;
+  animation: headerFloat 4s ease-in-out infinite;
+}
+
+/* Header background glow */
+.startup-header::before {
+  content: "";
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  top: -100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    circle,
+    rgba(99, 102, 241, 0.16),
+    transparent 70%
+  );
+  filter: blur(20px);
+  pointer-events: none;
+  animation: headerGlow 5s ease-in-out infinite;
+  z-index: 0;
+}
+
+/* Keep header text above glow */
+.startup-header > * {
+  position: relative;
+  z-index: 1;
+}
+
+
+/* =========================================================
+   FEASIBILITY SCORE
+========================================================= */
+
+.feasibility-score-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 28px;
+  padding: 45px 20px;
+
+  background:
+    radial-gradient(
+      circle at 50% 20%,
+      rgba(124, 58, 237, 0.18),
+      transparent 45%
+    ),
+    linear-gradient(
+      135deg,
+      #f5f3ff,
+      #eef2ff 55%,
+      #ecfeff
+    );
+
+  border: 1px solid rgba(99, 102, 241, 0.18);
+
+  animation: scoreGlow 4s ease-in-out infinite;
+}
+
+/* Decorative circles */
+.feasibility-score-card::before {
+  content: "";
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  top: -120px;
+  left: -80px;
+  border-radius: 50%;
+  background: rgba(124, 58, 237, 0.12);
+}
+
+.feasibility-score-card::after {
+  content: "";
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -70px;
+  bottom: -100px;
+  border-radius: 50%;
+  background: rgba(6, 182, 212, 0.12);
+}
+
+
+/* =========================================================
+   SCORE CIRCLE
+========================================================= */
+
+.score-circle {
+  --score: 0%;
+
+  width: 210px;
+  height: 210px;
+
+  margin: 25px auto 0;
+
+  border-radius: 50%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background:
+    conic-gradient(
+      #7c3aed var(--score),
+      #2563eb var(--score),
+      #e5e7eb 0
+    );
+
+  position: relative;
+
+  animation: scoreAppear 0.8s ease-out;
+}
+
+/* Inner circle */
+.score-circle::before {
+  content: "";
+  position: absolute;
+
+  width: 174px;
+  height: 174px;
+
+  border-radius: 50%;
+
+  background: #ffffff;
+
+  box-shadow:
+    inset 0 0 20px rgba(99, 102, 241, 0.08);
+}
+
+/* Score text */
+.score-circle-content {
+  position: relative;
+  z-index: 2;
+
+  text-align: center;
+}
+
+.score-number {
+  font-size: 42px;
+  line-height: 1;
+  font-weight: 800;
+
+  background: linear-gradient(
+    135deg,
+    #7c3aed,
+    #2563eb
+  );
+
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.score-out-of {
+  margin-top: 5px;
+  font-size: 14px;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+
+/* =========================================================
+   SCORE CARD HOVER
+========================================================= */
+
+.startup-score-card {
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.startup-score-card:hover {
+  transform: translateY(-5px);
+
+  box-shadow:
+    0 15px 35px rgba(15, 23, 42, 0.08);
+}
+
+
+/* =========================================================
+   ANALYZE BUTTON
+========================================================= */
+
+.startup-analyze-button {
+  position: relative;
+  overflow: hidden;
+
+  background: linear-gradient(
+    135deg,
+    #111827,
+    #312e81
+  );
+
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.startup-analyze-button:hover {
+  transform: translateY(-2px);
+
+  box-shadow:
+    0 10px 25px rgba(49, 46, 129, 0.25);
+}
+
+.startup-analyze-button::after {
+  content: "";
+
+  position: absolute;
+
+  top: 0;
+  left: -100%;
+
+  width: 50%;
+  height: 100%;
+
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.25),
+    transparent
+  );
+
+  transform: skewX(-20deg);
+
+  transition: left 0.6s ease;
+}
+
+.startup-analyze-button:hover::after {
+  left: 150%;
+}
+
+
+/* =========================================================
+   REDUCE ANIMATION FOR ACCESSIBILITY
+========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-header,
+  .startup-header::before,
+  .feasibility-score-card,
+  .score-circle {
+    animation: none;
+  }
+}
