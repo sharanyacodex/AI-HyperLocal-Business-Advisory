@@ -11,6 +11,8 @@ import {
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+import { useMemo } from "react";
+
 /* ================================
    COMPETITOR DATA TYPE
 ================================ */
@@ -36,46 +38,6 @@ interface MapComponentProps {
 }
 
 /* ================================
-   USER LOCATION ICON
-================================ */
-
-const userIcon = L.divIcon({
-  className: "",
-  html: `
-    <div style="
-      font-size: 32px;
-      line-height: 32px;
-      text-align: center;
-    ">
-      📍
-    </div>
-  `,
-  iconSize: [32, 32],
-  iconAnchor: [16, 32],
-  popupAnchor: [0, -32],
-});
-
-/* ================================
-   COMPETITOR SHOP ICON
-================================ */
-
-const competitorIcon = L.divIcon({
-  className: "",
-  html: `
-    <div style="
-      font-size: 28px;
-      line-height: 28px;
-      text-align: center;
-    ">
-      🏪
-    </div>
-  `,
-  iconSize: [28, 28],
-  iconAnchor: [14, 28],
-  popupAnchor: [0, -28],
-});
-
-/* ================================
    MAP COMPONENT
 ================================ */
 
@@ -85,6 +47,48 @@ export default function MapComponent({
   competitors,
   competitorCount,
 }: MapComponentProps) {
+  /*
+   * Create Leaflet icons only after the
+   * component is running in the browser.
+   *
+   * This prevents Leaflet-related problems
+   * in Next.js.
+   */
+  const userIcon = useMemo(() => {
+    return L.divIcon({
+      className: "",
+      html: `
+        <div style="
+          font-size: 32px;
+          line-height: 32px;
+          text-align: center;
+        ">
+          📍
+        </div>
+      `,
+      iconSize: [32, 32],
+      iconAnchor: [16, 32],
+      popupAnchor: [0, -32],
+    });
+  }, []);
+
+  const competitorIcon = useMemo(() => {
+    return L.divIcon({
+      className: "",
+      html: `
+        <div style="
+          font-size: 28px;
+          line-height: 28px;
+          text-align: center;
+        ">
+          🏪
+        </div>
+      `,
+      iconSize: [28, 28],
+      iconAnchor: [14, 28],
+      popupAnchor: [0, -28],
+    });
+  }, []);
 
   /*
    * Use backend count when provided.
@@ -108,7 +112,6 @@ export default function MapComponent({
           height: "500px",
         }}
       >
-
         <MapContainer
           center={[latitude, longitude]}
           zoom={12}
@@ -119,7 +122,9 @@ export default function MapComponent({
           }}
         >
 
-          {/* OpenStreetMap map tiles */}
+          {/* ================================
+              OPENSTREETMAP TILES
+          ================================= */}
 
           <TileLayer
             attribution="&copy; OpenStreetMap contributors"
@@ -172,28 +177,37 @@ export default function MapComponent({
                */
 
               if (
-                typeof shop.latitude !== "number" ||
-                typeof shop.longitude !== "number"
+                !Number.isFinite(
+                  Number(shop.latitude)
+                ) ||
+                !Number.isFinite(
+                  Number(shop.longitude)
+                )
               ) {
                 return null;
               }
 
+              const shopLatitude =
+                Number(shop.latitude);
+
+              const shopLongitude =
+                Number(shop.longitude);
+
               return (
                 <Marker
                   key={
-                    `${shop.name}-${shop.latitude}-${shop.longitude}-${index}`
+                    `${shop.name}-${shopLatitude}-${shopLongitude}-${index}`
                   }
                   position={[
-                    shop.latitude,
-                    shop.longitude,
+                    shopLatitude,
+                    shopLongitude,
                   ]}
                   icon={competitorIcon}
                 >
-
                   <Popup>
-
                     <strong>
-                      {shop.name}
+                      {shop.name ||
+                        "Nearby Business"}
                     </strong>
 
                     <br />
@@ -201,9 +215,7 @@ export default function MapComponent({
                     Category:{" "}
                     {shop.category ||
                       "Business"}
-
                   </Popup>
-
                 </Marker>
               );
             })}
@@ -220,7 +232,6 @@ export default function MapComponent({
         {/* Selected Location */}
 
         <div className="flex items-center gap-2">
-
           <span className="text-xl">
             📍
           </span>
@@ -228,13 +239,11 @@ export default function MapComponent({
           <span>
             Selected Location
           </span>
-
         </div>
 
         {/* Competitor Shops */}
 
         <div className="flex items-center gap-2">
-
           <span className="text-xl">
             🏪
           </span>
@@ -242,13 +251,11 @@ export default function MapComponent({
           <span>
             Competitor Shops
           </span>
-
         </div>
 
         {/* 10 KM Search Area */}
 
         <div className="flex items-center gap-2">
-
           <span
             className="
               inline-block
@@ -258,12 +265,11 @@ export default function MapComponent({
               border
               border-gray-400
             "
-          ></span>
+          />
 
           <span>
             10 km Search Area
           </span>
-
         </div>
 
       </div>
@@ -275,10 +281,8 @@ export default function MapComponent({
       <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 text-center shadow-sm">
 
         <p className="text-lg font-semibold text-gray-800">
-
           Total Competitor Shops ={" "}
           {totalCompetitors}
-
         </p>
 
       </div>

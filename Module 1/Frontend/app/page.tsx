@@ -1,21 +1,37 @@
 "use client";
 
+import { FormEvent, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { useRef, useState } from "react";
+const API_URL = "http://127.0.0.1:8000";
 
-const MapComponent = dynamic(() => import("./MapComponent"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex h-[500px] items-center justify-center rounded-3xl border border-slate-200 bg-slate-50">
-      <div className="text-center">
-        <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-4 border-slate-300 border-t-slate-900" />
-        <p className="text-sm font-medium text-slate-500">
-          Loading competitor map...
-        </p>
+/*
+  IMPORTANT:
+  Your MapComponent.tsx is inside the app folder.
+
+  Therefore:
+  ./MapComponent
+
+  NOT:
+  ./components/MapComponent
+*/
+
+const MapComponent = dynamic(
+  () => import("./MapComponent"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-[500px] items-center justify-center rounded-3xl border border-slate-200 bg-slate-100">
+        <div className="text-sm font-medium text-slate-500">
+          Loading map...
+        </div>
       </div>
-    </div>
-  ),
-});
+    ),
+  }
+);
+
+/* =========================================================
+   TYPES
+========================================================= */
 
 interface Competitor {
   name: string;
@@ -23,810 +39,667 @@ interface Competitor {
   longitude: number;
   category?: string;
   address?: string;
-  distance_m?: number;
-  place_id?: string;
+  distance_km?: number;
+  source?: string;
+}
+
+interface Weather {
+  temperature?: number | null;
+  humidity?: number | null;
+  apparentTemperature?: number | null;
+  precipitation?: number | null;
+  windSpeed?: number | null;
+  weatherCode?: number | null;
+  available?: boolean;
+}
+
+interface MarketSignals {
+  marketDemand: number;
+  competition: number;
+  profitPotential: number;
+  marketOpportunity: number;
+  risk: number;
+}
+
+interface AreaInsights {
+  population?: string;
+  populationScore?: number;
+  purchasingPower?: string;
+  purchasingPowerScore?: number;
+  temperature?: number | null;
+  humidity?: number | null;
+  weatherAvailable?: boolean;
 }
 
 interface AnalysisResult {
-  success?: boolean;
-  business_type?: string;
-  pincode?: string;
-  location_name?: string;
-  district?: string;
-  state?: string;
-  country?: string;
-  searched_location?: string;
+  success: boolean;
 
-  latitude?: number;
-  longitude?: number;
+  businessType: string;
 
-  market_demand?: number;
-  market_data_source?: string;
+  city: string;
+  district: string;
+  state: string;
+  pincode: string;
+  landmark?: string;
+  nearestLandmark?: string;
 
-  population_density?: number;
-  population_density_actual?: number;
-  population_data_source?: string;
-  population_estimate?: number;
+  latitude: number;
+  longitude: number;
 
-  purchasing_power?: number;
-  purchasing_power_proxy?: number | null;
-  purchasing_power_level?: string | null;
-  purchasing_power_data_source?: string | null;
-
-  competitor_count?: number;
-  competition_level?: number;
-  competitor_data_availability?: string;
-
-  opportunity?: number;
-  profit_potential?: number;
-
-  risk_safety?: number;
-  risk_data_source?: string;
-
-  current_weather?: {
-    temperature_c?: number;
-    wind_speed_kmh?: number;
-    precipitation_mm?: number;
-    weather_code?: number;
-    data_source?: string;
+  coordinates?: {
+    latitude: number;
+    longitude: number;
   };
 
-  feasibility?:
-    | number
-    | {
-        feasibility_score?: number;
-        score?: number;
-        recommendation?: string;
-      };
+  location?: {
+    city: string;
+    district: string;
+    state: string;
+    pincode: string;
+    landmark?: string;
+    latitude: number;
+    longitude: number;
+    formatted?: string;
+  };
 
-  competitors?: Competitor[];
-  message?: string;
+  feasibility: number;
+  feasibilityScore: number;
+  recommendation: string;
+
+  marketSignals: MarketSignals;
+
+  marketDemand?: number;
+  competition?: number;
+  profitPotential?: number;
+  marketOpportunity?: number;
+  risk?: number;
+
+  areaInsights?: AreaInsights;
+
+  weather?: Weather;
+
+  competitors: Competitor[];
+  competitorCount: number;
+
+  aiRecommendation?: string;
+  geminiRecommendation?: string;
+
+  ai?: {
+    provider?: string;
+    model?: string;
+    recommendation?: string;
+  };
+
+  apiStatus?: {
+    geoapify?: boolean;
+    olaMaps?: boolean;
+    gemini?: boolean;
+    weather?: boolean;
+  };
 }
 
-const API_BASE_URL = "http://127.0.0.1:8000";
-
-const PINCODE_TIMEOUT = 8000;
-
-/*
-  Main competitor search radius.
-
-  IMPORTANT:
-  This frontend sends 10 km to the backend.
-  The backend must also actually use this value
-  when querying the location APIs.
-*/
-const COMPETITOR_RADIUS_KM = 10;
-
 /* =========================================================
-   MAIN PAGE
+   PAGE
 ========================================================= */
 
-export default function Home() {
+export default function HomePage() {
+  /* =======================================================
+     FORM STATE
+  ======================================================= */
+
   const [businessType, setBusinessType] = useState("");
-
-  /*
-    Village / City is MANUAL.
-    It is intentionally NOT populated from PIN lookup.
-  */
-  const [villageCity, setVillageCity] = useState("");
-
-  /*
-    District and State are automatically populated
-    from the PIN code.
-  */
+  const [city, setCity] = useState("");
+  const [pincode, setPincode] = useState("");
   const [district, setDistrict] = useState("");
   const [state, setState] = useState("");
-
-  /*
-    Optional manual landmark.
-    This gives the backend additional location context.
-  */
   const [landmark, setLandmark] = useState("");
 
-  const [pincode, setPincode] = useState("");
+  /* =======================================================
+     UI STATE
+  ======================================================= */
+
+  const [detecting, setDetecting] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+
+  const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const [result, setResult] =
     useState<AnalysisResult | null>(null);
 
-  const [mapLatitude, setMapLatitude] =
-    useState<number | null>(null);
+  /* =======================================================
+     BACKEND URL
 
-  const [mapLongitude, setMapLongitude] =
-    useState<number | null>(null);
+     Your FastAPI is running on port 8000.
+  ======================================================= */
 
-  const [loading, setLoading] = useState(false);
+  const API_BASE =
+    process.env.NEXT_PUBLIC_API_URL ||
+    "http://127.0.0.1:8000";
 
-  const [locationLoading, setLocationLoading] =
-    useState(false);
+  /* =======================================================
+     PINCODE AUTO DETECTION
 
-  const [error, setError] = useState("");
+     User enters only pincode.
+     Backend returns district + state.
 
-  const resolvedPincodeRef =
-    useRef<string>("");
+     Example:
+     700052
+     -> North 24 Parganas
+     -> West Bengal
+  ======================================================= */
 
-  const resolvedCoordinatesRef =
-    useRef<{
-      latitude: number;
-      longitude: number;
-    } | null>(null);
+  useEffect(() => {
+    const pin = pincode.replace(/\D/g, "");
 
-  const pincodeRequestRef =
-    useRef<AbortController | null>(null);
-
-  /* =========================================================
-     PINCODE LOOKUP
-
-     PIN lookup ONLY updates:
-       - District
-       - State
-       - Coordinates
-
-     It DOES NOT update Village / City.
-  ========================================================= */
-
-  const lookupPincode = async (
-    cleanValue: string
-  ) => {
-    if (pincodeRequestRef.current) {
-      pincodeRequestRef.current.abort();
-    }
-
-    const controller =
-      new AbortController();
-
-    pincodeRequestRef.current =
-      controller;
-
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, PINCODE_TIMEOUT);
-
-    setLocationLoading(true);
-    setError("");
-
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/pincode?pincode=${encodeURIComponent(
-          cleanValue
-        )}`,
-        {
-          method: "GET",
-          signal: controller.signal,
-          cache: "no-store",
-        }
-      );
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(
-          `Pincode API returned ${response.status}`
-        );
-      }
-
-      const data =
-        await response.json();
-
-      console.log(
-        "PINCODE RESPONSE:",
-        data
-      );
-
-      if (!data.success) {
-        resolvedPincodeRef.current =
-          "";
-
-        resolvedCoordinatesRef.current =
-          null;
-
-        setError(
-          data.message ||
-            "PIN code not found."
-        );
-
-        return null;
-      }
-
-      /*
-        We intentionally ignore location_name
-        for Village / City.
-
-        The PIN API may return a postal-office name,
-        which is NOT necessarily the exact village/city
-        where the user wants to analyse the business.
-      */
-
-      const resolvedDistrict =
-        data.district ||
-        data.location?.district ||
-        "";
-
-      const resolvedState =
-        data.state ||
-        data.location?.state ||
-        "";
-
-      const latitude = Number(
-        data.latitude ??
-          data.location?.latitude
-      );
-
-      const longitude = Number(
-        data.longitude ??
-          data.location?.longitude
-      );
-
-      if (
-        !Number.isFinite(latitude) ||
-        !Number.isFinite(longitude)
-      ) {
-        resolvedPincodeRef.current =
-          "";
-
-        resolvedCoordinatesRef.current =
-          null;
-
-        setError(
-          "PIN code was found, but coordinates are unavailable."
-        );
-
-        return null;
-      }
-
-      resolvedPincodeRef.current =
-        cleanValue;
-
-      resolvedCoordinatesRef.current = {
-        latitude,
-        longitude,
-      };
-
-      /*
-        CORRECT BEHAVIOUR:
-        District -> automatic
-        State    -> automatic
-        Village  -> manual, untouched
-      */
-
-      setDistrict(
-        resolvedDistrict
-      );
-
-      setState(
-        resolvedState
-      );
-
-      setMapLatitude(latitude);
-      setMapLongitude(longitude);
-
-      return {
-        success: true,
-        latitude,
-        longitude,
-        district:
-          resolvedDistrict,
-        state:
-          resolvedState,
-      };
-    } catch (err: unknown) {
-      clearTimeout(timeoutId);
-
-      if (
-        err instanceof DOMException &&
-        err.name === "AbortError"
-      ) {
-        /*
-          Don't show an error for an old request
-          that was intentionally cancelled because
-          the user entered another digit.
-        */
-
-        if (
-          pincodeRequestRef.current ===
-          controller
-        ) {
-          setError(
-            "Pincode service is taking too long. Please try again."
-          );
-        }
-      } else {
-        console.error(
-          "PINCODE ERROR:",
-          err
-        );
-
-        setError(
-          "Could not connect to the pincode service. Make sure FastAPI is running on port 8000."
-        );
-      }
-
-      resolvedPincodeRef.current =
-        "";
-
-      resolvedCoordinatesRef.current =
-        null;
-
-      return null;
-    } finally {
-      clearTimeout(timeoutId);
-
-      if (
-        pincodeRequestRef.current ===
-        controller
-      ) {
-        setLocationLoading(false);
-      }
-    }
-  };
-
-  /* =========================================================
-     PINCODE CHANGE
-
-     PIN automatically resolves:
-       District
-       State
-       Coordinates
-
-     Village / City remains manual.
-  ========================================================= */
-
-  const handlePincodeChange = async (
-    value: string
-  ) => {
-    const cleanValue =
-      value
-        .replace(/\D/g, "")
-        .slice(0, 6);
-
-    setPincode(cleanValue);
-    setError("");
-
-    resolvedPincodeRef.current =
-      "";
-
-    resolvedCoordinatesRef.current =
-      null;
-
-    setMapLatitude(null);
-    setMapLongitude(null);
-
-    if (pincodeRequestRef.current) {
-      pincodeRequestRef.current.abort();
-      pincodeRequestRef.current =
-        null;
-    }
-
-    /*
-      Do NOT clear Village / City here.
-
-      The user owns this field.
-    */
-
-    if (cleanValue.length !== 6) {
+    if (pin.length !== 6) {
       setDistrict("");
       setState("");
-
       return;
     }
 
-    await lookupPincode(
-      cleanValue
-    );
-  };
+    let cancelled = false;
 
-  /* =========================================================
-     ANALYZE BUSINESS
-  ========================================================= */
+    const detectPincode = async () => {
+      setDetecting(true);
+      setError("");
 
-  const handleAnalyze = async () => {
-    setError("");
-
-    if (!businessType.trim()) {
-      setError(
-        "Please enter a business type."
-      );
-      return;
-    }
-
-    if (!villageCity.trim()) {
-      setError(
-        "Please enter your Village / City."
-      );
-      return;
-    }
-
-    if (!/^\d{6}$/.test(
-      pincode.trim()
-    )) {
-      setError(
-        "Please enter a valid 6-digit PIN code."
-      );
-      return;
-    }
-
-    if (!district.trim()) {
-      setError(
-        "District could not be resolved from the PIN code."
-      );
-      return;
-    }
-
-    if (!state.trim()) {
-      setError(
-        "State could not be resolved from the PIN code."
-      );
-      return;
-    }
-
-    setLoading(true);
-    setResult(null);
-
-    try {
-      let coordinates =
-        resolvedCoordinatesRef.current;
-
-      /*
-        If the PIN lookup has not completed,
-        resolve it now.
-
-        Notice that we DO NOT replace villageCity
-        with anything returned by the PIN API.
-      */
-
-      if (
-        !coordinates ||
-        resolvedPincodeRef.current !==
-          pincode.trim()
-      ) {
-        console.log(
-          "PIN not resolved yet. Looking up PIN..."
-        );
-
-        const pincodeData =
-          await lookupPincode(
-            pincode.trim()
-          );
-
-        if (!pincodeData) {
-          setLoading(false);
-          return;
-        }
-
-        coordinates = {
-          latitude:
-            pincodeData.latitude,
-
-          longitude:
-            pincodeData.longitude,
-        };
-      }
-
-      if (!coordinates) {
-        setError(
-          "Could not get coordinates for this PIN code."
-        );
-
-        return;
-      }
-
-      const {
-        latitude,
-        longitude,
-      } = coordinates;
-
-      console.log(
-        "USING COORDINATES:",
-        latitude,
-        longitude
-      );
-
-      console.log(
-        "USER LOCATION:",
-        {
-          villageCity,
-          district,
-          state,
-          landmark,
-          pincode,
-        }
-      );
-
-      setMapLatitude(latitude);
-      setMapLongitude(longitude);
-
-      /*
-        =====================================================
-        IMPORTANT
-
-        Send the user's actual manual location details
-        to the backend.
-
-        PIN:
-          gives coordinates / geographic reference
-
-        Village / City:
-          user's exact textual location
-
-        Landmark:
-          additional location clue
-
-        District / State:
-          automatically resolved from PIN
-      =====================================================
-      */
-
-      const params =
-        new URLSearchParams();
-
-      params.set(
-        "latitude",
-        String(latitude)
-      );
-
-      params.set(
-        "longitude",
-        String(longitude)
-      );
-
-      params.set(
-        "business_type",
-        businessType.trim()
-      );
-
-      params.set(
-        "village_city",
-        villageCity.trim()
-      );
-
-      params.set(
-        "district",
-        district.trim()
-      );
-
-      params.set(
-        "state",
-        state.trim()
-      );
-
-      params.set(
-        "pincode",
-        pincode.trim()
-      );
-
-      /*
-        Optional landmark.
-        Empty landmark is allowed.
-      */
-
-      if (landmark.trim()) {
-        params.set(
-          "landmark",
-          landmark.trim()
-        );
-      }
-
-      /*
-        Explicit 10 km search radius.
-      */
-
-      params.set(
-        "radius_km",
-        String(COMPETITOR_RADIUS_KM)
-      );
-
-      console.log(
-        "Calling /module1/analyze with:",
-        params.toString()
-      );
-
-      const analyzeResponse =
-        await fetch(
-          `${API_BASE_URL}/module1/analyze?${params.toString()}`,
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/pincode/${pin}`,
           {
             method: "GET",
-            cache: "no-store",
+            headers: {
+              Accept: "application/json",
+            },
           }
         );
 
-      if (!analyzeResponse.ok) {
-        throw new Error(
-          `Analysis API returned ${analyzeResponse.status}`
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            typeof data?.detail === "string"
+              ? data.detail
+              : "Unable to detect district and state."
+          );
+        }
+
+        if (cancelled) return;
+
+        /*
+          IMPORTANT:
+          Do not take city from this response.
+          City / Village is entered manually by the user.
+        */
+
+        setDistrict(
+          typeof data.district === "string"
+            ? data.district
+            : ""
         );
+
+        setState(
+          typeof data.state === "string"
+            ? data.state
+            : ""
+        );
+
+        setSuccessMessage(
+          "District and state detected successfully."
+        );
+      } catch (err) {
+        if (cancelled) return;
+
+        setDistrict("");
+        setState("");
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Pincode detection failed."
+        );
+      } finally {
+        if (!cancelled) {
+          setDetecting(false);
+        }
       }
+    };
 
-      const analyzeData =
-        await analyzeResponse.json();
+    detectPincode();
 
-      console.log(
-        "ANALYSIS DATA:",
-        analyzeData
+    return () => {
+      cancelled = true;
+    };
+  }, [pincode]);
+
+  /* =======================================================
+     MANUAL PINCODE DETECT BUTTON
+  ======================================================= */
+
+  const handleDetect = async () => {
+    const pin = pincode.replace(/\D/g, "");
+
+    setError("");
+    setSuccessMessage("");
+
+    if (pin.length !== 6) {
+      setError("Please enter a valid 6-digit pincode.");
+      return;
+    }
+
+    setDetecting(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/pincode/${pin}`,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+        }
       );
 
-      if (!analyzeData.success) {
-        setError(
-          analyzeData.message ||
-            "Business analysis failed."
-        );
+      const data = await response.json();
 
-        return;
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.detail === "string"
+            ? data.detail
+            : "Pincode could not be detected."
+        );
       }
 
-      const competitors: Competitor[] =
-        Array.isArray(
-          analyzeData.competitors
-        )
-          ? analyzeData.competitors
-          : [];
+      setDistrict(data.district || "");
+      setState(data.state || "");
 
-      /*
-        IMPORTANT:
-        searched_location now represents
-        the user's manual location.
-
-        We do NOT use the PIN API's
-        location_name here.
-      */
-
-      const searchedLocation =
-        [
-          villageCity.trim(),
-          district.trim(),
-          state.trim(),
-        ]
-          .filter(Boolean)
-          .join(", ");
-
-      const finalResult:
-        AnalysisResult = {
-          ...analyzeData,
-
-          pincode:
-            pincode.trim(),
-
-          /*
-            Keep user's manually entered
-            Village / City.
-          */
-
-          location_name:
-            villageCity.trim(),
-
-          district:
-            district.trim(),
-
-          state:
-            state.trim(),
-
-          latitude,
-          longitude,
-
-          searched_location:
-            searchedLocation,
-
-          competitors,
-
-          competitor_count:
-            typeof analyzeData.competitor_count ===
-            "number"
-              ? analyzeData.competitor_count
-              : competitors.length,
-        };
-
-      setResult(
-        finalResult
+      setSuccessMessage(
+        `Detected: ${data.district || "Unknown district"}, ${
+          data.state || "Unknown state"
+        }`
       );
     } catch (err) {
+      setDistrict("");
+      setState("");
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Pincode detection failed."
+      );
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  /* =======================================================
+     ANALYZE BUSINESS
+  ======================================================= */
+
+  const handleAnalyze = async (
+    event: FormEvent<HTMLFormElement>
+  ) => {
+    event.preventDefault();
+
+    setError("");
+    setSuccessMessage("");
+    setResult(null);
+
+    /* -------------------------------
+       VALIDATION
+    -------------------------------- */
+
+    if (!businessType.trim()) {
+      setError("Business type is required.");
+      return;
+    }
+
+    if (!city.trim()) {
+      setError("City / Village is required.");
+      return;
+    }
+
+    const cleanPin = pincode.replace(/\D/g, "");
+
+    if (cleanPin.length !== 6) {
+      setError("Pincode must contain exactly 6 digits.");
+      return;
+    }
+
+    /*
+      Landmark is OPTIONAL.
+      Therefore we DO NOT reject an empty landmark.
+    */
+
+    setAnalyzing(true);
+
+    try {
+      /*
+        IMPORTANT:
+        These names match your Pydantic backend model.
+
+        businessType
+        city
+        pincode
+        nearestLandmark
+
+        No businessName.
+      */
+
+      const requestBody = {
+        businessType: businessType.trim(),
+        city: city.trim(),
+        pincode: cleanPin,
+        nearestLandmark: landmark.trim(),
+      };
+
+      console.log(
+        "Sending analysis request:",
+        requestBody
+      );
+
+      const response = await fetch(
+        `${API_BASE}/api/analyze`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+
+          body: JSON.stringify(requestBody),
+        }
+      );
+
+      const data = await response.json();
+
+      console.log(
+        "Backend analysis response:",
+        data
+      );
+
+      if (!response.ok) {
+        /*
+          FastAPI validation error.
+        */
+
+        if (Array.isArray(data?.detail)) {
+          const messages = data.detail
+            .map((item: any) => {
+              if (
+                typeof item === "string"
+              ) {
+                return item;
+              }
+
+              return (
+                item?.msg ||
+                item?.message ||
+                "Invalid input"
+              );
+            })
+            .filter(Boolean);
+
+          throw new Error(
+            messages.join(" | ")
+          );
+        }
+
+        throw new Error(
+          typeof data?.detail === "string"
+            ? data.detail
+            : "Business analysis failed."
+        );
+      }
+
+      if (!data || data.success !== true) {
+        throw new Error(
+          "Backend returned an invalid analysis response."
+        );
+      }
+
+      /*
+        Make absolutely sure competitors is an array.
+        This prevents [object Object] problems.
+      */
+
+      const safeResult: AnalysisResult = {
+        ...data,
+
+        competitors: Array.isArray(
+          data.competitors
+        )
+          ? data.competitors
+          : [],
+
+        competitorCount:
+          typeof data.competitorCount ===
+          "number"
+            ? data.competitorCount
+            : Array.isArray(
+                data.competitors
+              )
+            ? data.competitors.length
+            : 0,
+      };
+
+      setResult(safeResult);
+
+      /*
+        Scroll to report.
+      */
+
+      setTimeout(() => {
+        document
+          .getElementById("analysis-result")
+          ?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+      }, 100);
+    } catch (err) {
       console.error(
-        "ANALYSIS ERROR:",
+        "Analysis error:",
         err
       );
 
       setError(
-        "Could not connect to backend. Make sure FastAPI is running on port 8000."
+        err instanceof Error
+          ? err.message
+          : "Something went wrong while analyzing the business."
       );
     } finally {
-      setLoading(false);
+      setAnalyzing(false);
     }
   };
 
-  /* =========================================================
-     RENDER
-  ========================================================= */
+  /* =======================================================
+     START NEW ANALYSIS
+  ======================================================= */
+
+  const handleNewAnalysis = () => {
+    setResult(null);
+    setError("");
+    setSuccessMessage("");
+
+    setBusinessType("");
+    setCity("");
+    setPincode("");
+    setDistrict("");
+    setState("");
+    setLandmark("");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  };
+
+  /* =======================================================
+     WEATHER DESCRIPTION
+  ======================================================= */
+
+  const getWeatherText = (
+    code?: number | null
+  ) => {
+    if (code === undefined || code === null) {
+      return "Not available";
+    }
+
+    if (code === 0) return "Clear sky";
+    if (code <= 3) return "Partly cloudy";
+    if (code <= 48) return "Foggy";
+    if (code <= 57) return "Drizzle";
+    if (code <= 67) return "Rain";
+    if (code <= 77) return "Snow";
+    if (code <= 82) return "Rain showers";
+    if (code <= 86) return "Snow showers";
+    return "Thunderstorm";
+  };
+
+  /* =======================================================
+     SCORE HELPER
+  ======================================================= */
+
+  const scoreValue = (
+    value: unknown
+  ): number => {
+    if (
+      typeof value === "number" &&
+      Number.isFinite(value)
+    ) {
+      return Math.max(
+        0,
+        Math.min(100, Math.round(value))
+      );
+    }
+
+    return 0;
+  };
+
+  /* =======================================================
+     SCORE BAR
+  ======================================================= */
+
+  const ScoreBar = ({
+    value,
+  }: {
+    value: number;
+  }) => {
+    const safe = scoreValue(value);
+
+    return (
+      <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-slate-900 transition-all duration-700"
+          style={{
+            width: `${safe}%`,
+          }}
+        />
+      </div>
+    );
+  };
+
+  /* =======================================================
+     PAGE
+  ======================================================= */
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#f7f8fc] text-slate-900">
+    <main className="min-h-screen bg-[#f8fafc] text-slate-900">
 
-      {/* HEADER */}
+      {/* ===================================================
+          HEADER
+      ================================================== */}
 
-      <section className="relative overflow-hidden bg-slate-950">
+      <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 lg:px-8">
 
-        <div className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 animate-pulse rounded-full bg-cyan-500/20 blur-3xl" />
+          <div className="flex items-center gap-3">
 
-        <div className="pointer-events-none absolute -right-32 top-10 h-96 w-96 animate-pulse rounded-full bg-violet-500/20 blur-3xl" />
-
-        <div className="pointer-events-none absolute bottom-0 left-1/2 h-48 w-48 -translate-x-1/2 rounded-full bg-blue-500/10 blur-3xl" />
-
-        <div className="relative mx-auto max-w-7xl px-6 py-20 lg:px-8">
-
-          <div className="mx-auto max-w-4xl text-center">
-
-            <div className="mb-7 inline-flex animate-[pulse_3s_ease-in-out_infinite] items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-slate-300 backdrop-blur">
-
-              <span className="h-2 w-2 animate-ping rounded-full bg-emerald-400" />
-
-              AI-Powered Local Business Intelligence
-
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white shadow-lg">
+              ✦
             </div>
 
-            <h1 className="text-4xl font-black tracking-tight text-white sm:text-6xl lg:text-7xl">
+            <div>
+              <h1 className="text-base font-bold tracking-tight">
+                HyperLocal AI
+              </h1>
 
-              Turn your business idea
+              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">
+                Business Advisory
+              </p>
+            </div>
 
-              <span className="block bg-gradient-to-r from-cyan-300 via-blue-400 to-violet-400 bg-clip-text text-transparent">
+          </div>
 
-                into a smarter decision.
-
-              </span>
-
-            </h1>
-
-            <p className="mx-auto mt-6 max-w-2xl text-base leading-7 text-slate-400 sm:text-lg">
-
-              Analyze market demand, competition,
-              opportunity, profit potential and
-              local risk — all in one place.
-
-            </p>
-
+          <div className="hidden rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-xs font-semibold text-slate-600 sm:block">
+            AI Market Analysis
           </div>
 
         </div>
+      </header>
 
-      </section>
+      {/* ===================================================
+          HERO / FORM
+      ================================================== */}
 
-      {/* MAIN */}
+      <section className="mx-auto max-w-7xl px-5 pb-14 pt-12 lg:px-8 lg:pt-16">
 
-      <div className="relative mx-auto -mt-8 max-w-7xl px-6 pb-16 lg:px-8">
+        <div className="mx-auto max-w-3xl text-center">
 
-        {/* INPUT CARD */}
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 shadow-sm">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            AI-powered local feasibility analysis
+          </div>
 
-        <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-[0_25px_80px_-25px_rgba(15,23,42,0.25)] sm:p-8 lg:p-10">
+          <h2 className="text-4xl font-black tracking-tight text-slate-950 sm:text-5xl">
+            Tell us about your business
+          </h2>
 
-          <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-slate-500">
+            Enter your business type and local area details
+            to generate an AI-powered feasibility report.
+          </p>
 
-            <div>
+        </div>
 
-              <p className="text-sm font-semibold uppercase tracking-wider text-blue-600">
-                Business analysis
-              </p>
+        {/* =================================================
+            FORM CARD
+        ================================================== */}
 
-              <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-                Tell us about your business
-              </h2>
+        <div className="mx-auto mt-10 max-w-4xl rounded-[28px] border border-slate-200 bg-white p-5 shadow-[0_20px_70px_rgba(15,23,42,0.08)] sm:p-8">
 
-              <p className="mt-2 text-sm text-slate-500">
-                Enter your business idea, location
-                and 6-digit Indian PIN code.
-              </p>
+          <div className="mb-8 flex items-center gap-3">
 
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-950 text-lg text-white">
+              01
             </div>
 
-            <div className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-500">
-              Takes less than a minute
+            <div>
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+                STEP 01 / ANALYZE
+              </p>
+
+              <h3 className="mt-1 text-xl font-bold">
+                AI Market Analysis
+              </h3>
             </div>
 
           </div>
 
-          {/* INPUT GRID */}
-
-          <div className="grid gap-5 md:grid-cols-2">
+          <form
+            onSubmit={handleAnalyze}
+            className="space-y-6"
+          >
 
             {/* BUSINESS TYPE */}
 
-            <InputField
-              label="Business Type"
-              required
-            >
+            <div>
+              <label className="mb-2 block text-sm font-bold text-slate-700">
+                Business Type <span className="text-red-500">*</span>
+              </label>
 
               <input
                 type="text"
@@ -836,127 +709,122 @@ export default function Home() {
                     e.target.value
                   )
                 }
-                placeholder="e.g. Dairy, Bakery, Cafe"
-                className={inputClass}
+                placeholder="e.g. Grocery Store"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm outline-none transition focus:border-slate-900 focus:bg-white focus:ring-4 focus:ring-slate-900/5"
               />
+            </div>
 
-            </InputField>
+            {/* CITY */}
 
-            {/* PIN CODE */}
+            <div>
+              <label className="mb-2 block text-sm font-bold text-slate-700">
+                City / Village{" "}
+                <span className="text-red-500">*</span>
+              </label>
 
-            <InputField
-              label="PIN Code"
-              required
-            >
+              <input
+                type="text"
+                value={city}
+                onChange={(e) =>
+                  setCity(e.target.value)
+                }
+                placeholder="Enter city or village"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm outline-none transition focus:border-slate-900 focus:bg-white focus:ring-4 focus:ring-slate-900/5"
+              />
+            </div>
 
-              <div className="relative">
+            {/* PINCODE */}
+
+            <div>
+              <label className="mb-2 block text-sm font-bold text-slate-700">
+                Pincode <span className="text-red-500">*</span>
+              </label>
+
+              <div className="flex flex-col gap-3 sm:flex-row">
 
                 <input
                   type="text"
                   inputMode="numeric"
                   maxLength={6}
                   value={pincode}
-                  onChange={(e) =>
-                    handlePincodeChange(
+                  onChange={(e) => {
+                    const value =
                       e.target.value
-                    )
-                  }
-                  placeholder="e.g. 722122"
-                  className={`${inputClass} pr-12`}
+                        .replace(/\D/g, "")
+                        .slice(0, 6);
+
+                    setPincode(value);
+                    setSuccessMessage("");
+                    setError("");
+                  }}
+                  placeholder="700052"
+                  className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-medium outline-none transition focus:border-slate-900 focus:bg-white focus:ring-4 focus:ring-slate-900/5"
                 />
 
-                {locationLoading && (
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2">
-
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
-
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={handleDetect}
+                  disabled={
+                    detecting ||
+                    pincode.length !== 6
+                  }
+                  className="flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-6 py-4 text-sm font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {detecting ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                      Detecting...
+                    </>
+                  ) : (
+                    <>
+                      ⌖ Detect
+                    </>
+                  )}
+                </button>
 
               </div>
 
-              {locationLoading && (
-                <p className="mt-2 text-xs font-medium text-blue-600">
-                  Finding district and state...
-                </p>
-              )}
-
-              {pincode.length === 6 &&
-                !locationLoading &&
-                district &&
-                state && (
-                  <p className="mt-2 text-xs font-medium text-emerald-600">
-                    ✓ District and state found
-                  </p>
-                )}
-
-            </InputField>
-
-            {/* VILLAGE / CITY - MANUAL */}
-
-            <InputField
-              label="Village / City"
-              required
-            >
-
-              <input
-                type="text"
-                value={villageCity}
-                onChange={(e) =>
-                  setVillageCity(
-                    e.target.value
-                  )
-                }
-                placeholder="Enter village or city manually"
-                className={inputClass}
-              />
-
               <p className="mt-2 text-xs text-slate-400">
-                Enter the exact village, town or city
-                where you want to start the business.
+                Enter your 6-digit pincode. District and
+                state will be detected automatically.
               </p>
+            </div>
 
-            </InputField>
+            {/* DISTRICT + STATE */}
 
-            {/* DISTRICT - AUTO */}
+            <div className="grid gap-4 sm:grid-cols-2">
 
-            <InputField label="District">
+              <div>
+                <label className="mb-2 block text-sm font-bold text-slate-700">
+                  District <span className="text-xs font-medium text-slate-400">• Auto</span>
+                </label>
 
-              <input
-                type="text"
-                value={district}
-                readOnly
-                placeholder="Automatically filled from PIN"
-                className={`${inputClass} cursor-not-allowed bg-slate-100 text-slate-600`}
-              />
+                <div className="flex min-h-[54px] items-center rounded-2xl border border-emerald-100 bg-emerald-50 px-4 text-sm font-semibold text-slate-700">
+                  {district || "Will be detected from pincode"}
+                </div>
+              </div>
 
-              <p className="mt-2 text-xs text-emerald-600">
-                Automatically detected from PIN code
-              </p>
+              <div>
+                <label className="mb-2 block text-sm font-bold text-slate-700">
+                  State <span className="text-xs font-medium text-slate-400">• Auto</span>
+                </label>
 
-            </InputField>
+                <div className="flex min-h-[54px] items-center rounded-2xl border border-emerald-100 bg-emerald-50 px-4 text-sm font-semibold text-slate-700">
+                  {state || "Will be detected from pincode"}
+                </div>
+              </div>
 
-            {/* STATE - AUTO */}
+            </div>
 
-            <InputField label="State">
+            {/* LANDMARK */}
 
-              <input
-                type="text"
-                value={state}
-                readOnly
-                placeholder="Automatically filled from PIN"
-                className={`${inputClass} cursor-not-allowed bg-slate-100 text-slate-600`}
-              />
-
-              <p className="mt-2 text-xs text-emerald-600">
-                Automatically detected from PIN code
-              </p>
-
-            </InputField>
-
-            {/* NEAREST LANDMARK - MANUAL */}
-
-            <InputField label="Nearest Landmark">
+            <div>
+              <label className="mb-2 block text-sm font-bold text-slate-700">
+                Nearest Landmark{" "}
+                <span className="text-xs font-medium text-slate-400">
+                  • Optional
+                </span>
+              </label>
 
               <input
                 type="text"
@@ -966,245 +834,149 @@ export default function Home() {
                     e.target.value
                   )
                 }
-                placeholder="e.g. near school, market, railway station"
-                className={inputClass}
+                placeholder="e.g. Airport Gate, Metro Station"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm outline-none transition focus:border-slate-900 focus:bg-white focus:ring-4 focus:ring-slate-900/5"
               />
+            </div>
 
-              <p className="mt-2 text-xs text-slate-400">
-                Optional, but recommended for better
-                location matching.
-              </p>
+            {/* SUCCESS */}
 
-            </InputField>
-
-          </div>
-
-          {/* HOW IT WORKS */}
-
-          <div className="mt-7 rounded-2xl border border-blue-100 bg-blue-50/60 p-5">
-
-            <div className="flex gap-4">
-
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-lg text-white shadow-lg shadow-blue-600/20">
-                ✦
+            {successMessage && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                ✓ {successMessage}
               </div>
+            )}
+
+            {/* ERROR */}
+
+            {error && (
+              <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold leading-6 text-red-700">
+                {error}
+              </div>
+            )}
+
+            {/* ANALYZE BUTTON */}
+
+            <button
+              type="submit"
+              disabled={analyzing}
+              className="group flex w-full items-center justify-center gap-3 rounded-2xl bg-slate-950 px-6 py-4 text-sm font-bold text-white shadow-xl shadow-slate-950/10 transition hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {analyzing ? (
+                <>
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  Analyzing Local Market...
+                </>
+              ) : (
+                <>
+                  ✦ Analyze Business Feasibility
+                  <span className="transition group-hover:translate-x-1">
+                    →
+                  </span>
+                </>
+              )}
+            </button>
+
+          </form>
+        </div>
+      </section>
+
+      {/* ===================================================
+          RESULT
+      ================================================== */}
+
+      {result && (
+        <section
+          id="analysis-result"
+          className="border-t border-slate-200 bg-white"
+        >
+
+          <div className="mx-auto max-w-7xl px-5 py-12 lg:px-8">
+
+            {/* =================================================
+                RESULT HEADER
+            ================================================== */}
+
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
 
               <div>
 
-                <p className="font-semibold text-slate-800">
-                  How it works
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
+                  ✓ ANALYSIS COMPLETE
+                </div>
+
+                <h2 className="text-3xl font-black tracking-tight sm:text-4xl">
+                  {result.businessType}
+                </h2>
+
+                <p className="mt-2 text-sm font-medium text-slate-500">
+                  {result.city},{" "}
+                  {result.district},{" "}
+                  {result.state}
                 </p>
 
-                <p className="mt-1 text-sm leading-6 text-slate-600">
-
-                  PIN code automatically provides the
-                  district, state and geographic
-                  coordinates. You manually provide the
-                  exact Village / City and optional nearest
-                  landmark. The system then uses these
-                  details to search for local businesses
-                  within a 10 km area.
-
+                <p className="mt-1 text-xs font-bold uppercase tracking-wider text-slate-400">
+                  PINCODE {result.pincode}
                 </p>
+
+              </div>
+
+              {/* FEASIBILITY */}
+
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 px-7 py-5 text-center">
+
+                <p className="text-xs font-bold uppercase tracking-[0.15em] text-slate-400">
+                  Feasibility
+                </p>
+
+                <div className="mt-1 text-5xl font-black tracking-tight">
+                  {scoreValue(
+                    result.feasibilityScore ??
+                      result.feasibility
+                  )}
+                </div>
+
+                <p className="mt-1 text-xs font-semibold text-slate-400">
+                  out of 100
+                </p>
+
+                <div className="mt-3 inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
+                  ●{" "}
+                  {result.recommendation ||
+                    "GOOD OPPORTUNITY"}
+                </div>
 
               </div>
 
             </div>
 
-          </div>
+            {/* =================================================
+                AI RECOMMENDATION
+            ================================================== */}
 
-          {/* ERROR */}
+            <div className="mt-8 rounded-3xl border border-slate-200 bg-slate-950 p-6 text-white shadow-xl sm:p-8">
 
-          {error && (
+              <div className="flex items-start gap-4">
 
-            <div className="mt-5 flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">
-
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-red-100">
-                !
-              </span>
-
-              {error}
-
-            </div>
-
-          )}
-
-          {/* ANALYZE */}
-
-          <button
-            onClick={handleAnalyze}
-            disabled={
-              loading ||
-              locationLoading
-            }
-            className="group mt-7 flex w-full items-center justify-center gap-3 rounded-2xl bg-slate-950 px-6 py-4 text-sm font-bold text-white shadow-xl shadow-slate-900/20 transition duration-300 hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-blue-600/20 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-
-            {loading ? (
-              <>
-
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-
-                Analyzing your business...
-
-              </>
-            ) : locationLoading ? (
-              <>
-
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-
-                Finding location...
-
-              </>
-            ) : (
-              <>
-
-                Analyze Business
-
-                <span className="text-lg transition-transform duration-300 group-hover:translate-x-1">
-                  →
-                </span>
-
-              </>
-            )}
-
-          </button>
-
-        </div>
-
-        {/* =================================================
-            RESULTS
-        ================================================= */}
-
-        {result && (
-
-          <div className="mt-8 space-y-8">
-
-            {/* RESULT TOP */}
-
-            <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_25px_80px_-30px_rgba(15,23,42,0.2)]">
-
-              <div className="border-b border-slate-100 p-6 sm:p-8">
-
-                <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-
-                  <div>
-
-                    <div className="mb-2 inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold uppercase tracking-wider text-emerald-600">
-                      Analysis complete
-                    </div>
-
-                    <h2 className="text-2xl font-black tracking-tight text-slate-900 sm:text-3xl">
-                      Feasibility Result
-                    </h2>
-
-                    <p className="mt-2 text-slate-500">
-
-                      {result.business_type ||
-                        businessType}{" "}
-
-                      <span className="text-slate-300">
-                        •
-                      </span>{" "}
-
-                      {result.searched_location ||
-                        villageCity}
-
-                    </p>
-
-                  </div>
-
-                  <div className="rounded-2xl bg-slate-50 px-5 py-3">
-
-                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                      PIN Code
-                    </p>
-
-                    <p className="mt-1 text-lg font-bold text-slate-800">
-                      {result.pincode ||
-                        pincode}
-                    </p>
-
-                  </div>
-
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white/10 text-xl">
+                  ✦
                 </div>
 
-              </div>
+                <div className="min-w-0">
 
-              {/* SCORE + SUMMARY */}
-
-              <div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[auto_1fr] lg:items-center">
-
-                <div className="flex justify-center">
-
-                  <FeasibilityCircle
-                    score={getFeasibilityScore(
-                      result
-                    )}
-                  />
-
-                </div>
-
-                <div>
-
-                  <p className="text-sm font-bold uppercase tracking-wider text-slate-400">
-                    Recommendation
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
+                    AI RECOMMENDATION
                   </p>
 
-                  <h3 className="mt-2 text-3xl font-black tracking-tight text-slate-900">
-                    {getRecommendation(
-                      result
-                    )}
+                  <h3 className="mt-2 text-2xl font-black">
+                    {result.recommendation}
                   </h3>
 
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500">
-
-                    This score combines market demand,
-                    local competition, business
-                    opportunity, profit potential and
-                    local risk/safety.
-
+                  <p className="mt-3 text-sm leading-7 text-slate-300">
+                    The AI system analyzed your selected
+                    business and local market conditions
+                    to generate this recommendation.
                   </p>
-
-                  <div className="mt-6 grid gap-3 sm:grid-cols-3">
-
-                    <MiniStat
-                      label="Location"
-                      value={
-                        result.location_name ||
-                        villageCity ||
-                        "--"
-                      }
-                    />
-
-                    <MiniStat
-                      label="District"
-                      value={
-                        result.district ||
-                        district ||
-                        "--"
-                      }
-                    />
-
-                    <MiniStat
-                      label="State"
-                      value={
-                        result.state ||
-                        state ||
-                        "--"
-                      }
-                    />
-
-                  </div>
-
-                  {landmark.trim() && (
-                    <div className="mt-3">
-                      <MiniStat
-                        label="Nearest Landmark"
-                        value={landmark}
-                      />
-                    </div>
-                  )}
 
                 </div>
 
@@ -1212,374 +984,398 @@ export default function Home() {
 
             </div>
 
-            {/* BUSINESS SIGNALS */}
+            {/* =================================================
+                LOCATION DETAILS
+            ================================================== */}
 
-            <div>
+            <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 
-              <div className="mb-5">
+              <InfoCard
+                label="City / Village"
+                value={result.city}
+              />
 
-                <p className="text-sm font-semibold uppercase tracking-wider text-blue-600">
-                  Business signals
-                </p>
+              <InfoCard
+                label="District"
+                value={result.district}
+              />
 
-                <h3 className="mt-1 text-2xl font-bold text-slate-900">
-                  Your business at a glance
-                </h3>
+              <InfoCard
+                label="State"
+                value={result.state}
+              />
+
+              <InfoCard
+                label="Landmark"
+                value={
+                  result.landmark ||
+                  result.nearestLandmark ||
+                  "Not provided"
+                }
+              />
+
+            </div>
+
+            {/* =================================================
+                MARKET SIGNALS
+            ================================================== */}
+
+            <div className="mt-12">
+
+              <SectionHeading
+                eyebrow="MARKET SIGNALS"
+                title="Business feasibility signals"
+                description="Key indicators generated from the local business analysis."
+              />
+
+              <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+
+                <ScoreCard
+                  icon="⌁"
+                  title="Market Demand"
+                  subtitle="Estimated local demand"
+                  value={
+                    result.marketSignals
+                      ?.marketDemand ?? 0
+                  }
+                />
+
+                <ScoreCard
+                  icon="◉"
+                  title="Competition"
+                  subtitle="Competitive pressure"
+                  value={
+                    result.marketSignals
+                      ?.competition ?? 0
+                  }
+                />
+
+                <ScoreCard
+                  icon="₹"
+                  title="Profit Potential"
+                  subtitle="Expected earning potential"
+                  value={
+                    result.marketSignals
+                      ?.profitPotential ?? 0
+                  }
+                />
+
+                <ScoreCard
+                  icon="↗"
+                  title="Market Opportunity"
+                  subtitle="Overall market opportunity"
+                  value={
+                    result.marketSignals
+                      ?.marketOpportunity ?? 0
+                  }
+                />
+
+                <ScoreCard
+                  icon="!"
+                  title="Risk"
+                  subtitle="Estimated business risk"
+                  value={
+                    result.marketSignals
+                      ?.risk ?? 0
+                  }
+                />
 
               </div>
+            </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {/* =================================================
+                LOCAL INTELLIGENCE
+            ================================================== */}
 
-                <ScoreCard
-                  title="Market Demand"
+            <div className="mt-12">
+
+              <SectionHeading
+                eyebrow="LOCAL INTELLIGENCE"
+                title="Area insights"
+                description="Important information about your selected location."
+              />
+
+              <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+
+                <InsightCard
+                  title="Population"
                   value={
-                    result.market_demand
+                    result.areaInsights
+                      ?.population ||
+                    "Not available"
                   }
-                  description={
-                    result.market_data_source ||
-                    "Market analysis"
-                  }
-                  icon="↗"
-                  type="positive"
-                />
-
-                {/* POPULATION DENSITY */}
-
-                <ScoreCard
-                  title="Population Density"
-                  value={
-                    result.population_density_actual ??
-                    result.population_density
-                  }
-                  description="People per km²"
-                  icon="👥"
-                  type="population"
-                  showBar={false}
-                  suffix={
-                    result.population_density_actual
-                      ? " people/km²"
-                      : "/100"
+                  score={
+                    result.areaInsights
+                      ?.populationScore
                   }
                 />
 
-                {/* PURCHASING POWER */}
-
-                <ScoreCard
+                <InsightCard
                   title="Purchasing Power"
                   value={
-                    result.purchasing_power
+                    result.areaInsights
+                      ?.purchasingPower ||
+                    "Not available"
                   }
-                  description={
-                    result.purchasing_power_data_source ||
-                    "Local purchasing power indicator"
+                  score={
+                    result.areaInsights
+                      ?.purchasingPowerScore
                   }
-                  icon="₹"
-                  type="purchasing"
-                  status={getPurchasingPowerStatus(
-                    result
-                  )}
                 />
 
-                <ScoreCard
-                  title="Competition"
+                <InsightCard
+                  title="Temperature"
                   value={
-                    result.competition_level
+                    result.weather?.temperature !==
+                    undefined &&
+                    result.weather?.temperature !==
+                      null
+                      ? `${result.weather.temperature}°C`
+                      : "Not available"
                   }
-                  description={
-                    result.competitor_data_availability ===
-                    "LIMITED"
-                      ? "Limited competitor data"
-                      : "Local competition"
-                  }
-                  icon="◎"
-                  type="competition"
                 />
 
-                <ScoreCard
-                  title="Opportunity"
-                  value={
-                    result.opportunity
-                  }
-                  description="Market opportunity"
-                  icon="✦"
-                  type="positive"
-                />
-
-                <ScoreCard
-                  title="Profit Potential"
-                  value={
-                    result.profit_potential
-                  }
-                  description="Estimated potential"
-                  icon="₹"
-                  type="profit"
-                />
-
-                <ScoreCard
-                  title="Risk Safety"
-                  value={
-                    result.risk_safety
-                  }
-                  description={
-                    result.risk_data_source ||
-                    "Risk assessment"
-                  }
-                  icon="✓"
-                  type="safety"
-                />
-
-                <ScoreCard
+                <InsightCard
                   title="Competitors"
-                  value={
-                    result.competitor_count
-                  }
-                  description="Businesses found within 10 km"
-                  icon="⌖"
-                  showBar={false}
-                  type="competition"
+                  value={`${result.competitorCount}`}
+                  subtitle="Nearby businesses found"
                 />
 
               </div>
 
             </div>
 
-            {/* WEATHER DASHBOARD */}
+            {/* =================================================
+                WEATHER
+            ================================================== */}
 
-            {result.current_weather && (
+            <div className="mt-12">
 
-              <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+              <SectionHeading
+                eyebrow="WEATHER"
+                title="Current local weather"
+                description="Weather data for the selected coordinates."
+              />
 
-                <div className="mb-6">
+              <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-6">
 
-                  <p className="text-sm font-semibold uppercase tracking-wider text-cyan-600">
-                    Environmental intelligence
-                  </p>
+                {result.weather?.available ? (
 
-                  <h3 className="mt-1 text-2xl font-bold text-slate-900">
-                    Current Weather
-                  </h3>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
 
-                </div>
+                    <WeatherCard
+                      icon="🌡"
+                      label="Temperature"
+                      value={
+                        result.weather
+                          .temperature != null
+                          ? `${result.weather.temperature}°C`
+                          : "N/A"
+                      }
+                    />
 
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <WeatherCard
+                      icon="💧"
+                      label="Humidity"
+                      value={
+                        result.weather
+                          .humidity != null
+                          ? `${result.weather.humidity}%`
+                          : "N/A"
+                      }
+                    />
 
-                  {/* WEATHER STATUS */}
-
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5">
-
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                      Condition
-                    </p>
-
-                    <p className="mt-3 text-2xl font-black text-slate-900">
-                      {getWeatherCondition(
-                        result.current_weather.weather_code
+                    <WeatherCard
+                      icon="☁"
+                      label="Condition"
+                      value={getWeatherText(
+                        result.weather
+                          .weatherCode
                       )}
-                    </p>
+                    />
+
+                    <WeatherCard
+                      icon="🌧"
+                      label="Precipitation"
+                      value={
+                        result.weather
+                          .precipitation != null
+                          ? `${result.weather.precipitation} mm`
+                          : "N/A"
+                      }
+                    />
+
+                    <WeatherCard
+                      icon="💨"
+                      label="Wind Speed"
+                      value={
+                        result.weather
+                          .windSpeed != null
+                          ? `${result.weather.windSpeed} km/h`
+                          : "N/A"
+                      }
+                    />
 
                   </div>
 
-                  {/* TEMPERATURE */}
+                ) : (
 
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5">
+                  <div className="rounded-2xl bg-white p-6 text-center text-sm font-medium text-slate-500">
+                    Weather data is not available.
+                  </div>
+
+                )}
+
+              </div>
+
+            </div>
+
+            {/* =================================================
+                MAP + COMPETITORS
+            ================================================== */}
+
+            <div className="mt-12">
+
+              <SectionHeading
+                eyebrow="LOCAL COMPETITION"
+                title="Nearby business landscape"
+                description="Your selected location and nearby market area."
+              />
+
+              <div className="mt-6 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+
+                <div className="p-4 sm:p-5">
+
+                  <div className="mb-4 rounded-2xl bg-slate-50 p-4">
 
                     <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                      Temperature
+                      Market Area
                     </p>
 
-                    <p className="mt-3 text-2xl font-black text-slate-900">
-
-                      {result.current_weather
-                        .temperature_c !== undefined
-                        ? `${result.current_weather.temperature_c}°C`
-                        : "--"}
-
+                    <p className="mt-1 text-sm font-bold text-slate-800">
+                      {result.city},{" "}
+                      {result.district},{" "}
+                      {result.state}
                     </p>
 
                   </div>
 
-                  {/* WIND */}
+                  {Number.isFinite(
+                    Number(result.latitude)
+                  ) &&
+                  Number.isFinite(
+                    Number(result.longitude)
+                  ) ? (
 
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5">
-
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                      Wind Speed
-                    </p>
-
-                    <p className="mt-3 text-2xl font-black text-slate-900">
-
-                      {result.current_weather
-                        .wind_speed_kmh !== undefined
-                        ? `${result.current_weather.wind_speed_kmh} km/h`
-                        : "--"}
-
-                    </p>
-
-                  </div>
-
-                  {/* PRECIPITATION */}
-
-                  <div className="rounded-2xl border border-slate-100 bg-slate-50 p-5">
-
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                      Precipitation
-                    </p>
-
-                    <p className="mt-3 text-2xl font-black text-slate-900">
-
-                      {result.current_weather
-                        .precipitation_mm !== undefined
-                        ? `${result.current_weather.precipitation_mm} mm`
-                        : "--"}
-
-                    </p>
-
-                  </div>
-
-                </div>
-
-                <div className="mt-4 rounded-2xl border border-slate-100 bg-gradient-to-br from-slate-50 to-white p-5">
-
-                  <p className="text-sm font-semibold text-slate-700">
-                    Weather Assessment
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500">
-
-                    Current local condition is{" "}
-
-                    <span className="font-bold text-slate-800">
-                      {getWeatherCondition(
-                        result.current_weather.weather_code
+                    <MapComponent
+                      latitude={Number(
+                        result.latitude
                       )}
-                    </span>
-                    .
+                      longitude={Number(
+                        result.longitude
+                      )}
+                      competitors={
+                        Array.isArray(
+                          result.competitors
+                        )
+                          ? result.competitors
+                          : []
+                      }
+                      competitorCount={
+                        Number(
+                          result.competitorCount
+                        ) || 0
+                      }
+                    />
 
-                  </p>
+                  ) : (
 
-                  {result.current_weather.data_source && (
-                    <p className="mt-2 text-xs font-medium text-slate-400">
-                      Source:{" "}
-                      {result.current_weather.data_source}
-                    </p>
+                    <div className="flex h-[500px] items-center justify-center rounded-2xl bg-slate-100">
+                      <p className="text-sm font-semibold text-slate-500">
+                        Map coordinates are not available.
+                      </p>
+                    </div>
+
                   )}
 
                 </div>
 
               </div>
 
-            )}
+            </div>
 
-            {/* MAP */}
+            {/* =================================================
+                COMPETITOR LIST
+            ================================================== */}
 
-            {mapLatitude !== null &&
-              mapLongitude !== null && (
+            <div className="mt-8 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
 
-                <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
 
-                  <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
+                    COMPETITORS
+                  </p>
 
-                    <div>
-
-                      <p className="text-sm font-semibold uppercase tracking-wider text-blue-600">
-                        Local intelligence
-                      </p>
-
-                      <h3 className="mt-1 text-2xl font-bold text-slate-900">
-                        Nearby Competitors
-                      </h3>
-
-                      <p className="mt-1 text-sm text-slate-500">
-                        Businesses found within{" "}
-                        {COMPETITOR_RADIUS_KM} km of
-                        your selected location.
-                      </p>
-
-                    </div>
-
-                    <div className="rounded-full bg-slate-100 px-4 py-2 text-xs font-bold text-slate-600">
-
-                      {result.competitor_count ??
-                        0}{" "}
-                      businesses found
-
-                    </div>
-
-                  </div>
-
-                  <MapComponent
-                    latitude={
-                      mapLatitude
-                    }
-                    longitude={
-                      mapLongitude
-                    }
-                    competitors={
-                      Array.isArray(
-                        result.competitors
-                      )
-                        ? result.competitors
-                        : []
-                    }
-                  />
-
+                  <h3 className="mt-1 text-2xl font-black">
+                    Nearby businesses
+                  </h3>
                 </div>
 
-              )}
-
-            {/* COMPETITOR DETAILS */}
-
-            <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-
-              <div className="mb-6">
-
-                <p className="text-sm font-semibold uppercase tracking-wider text-violet-600">
-                  Market landscape
-                </p>
-
-                <h3 className="mt-1 text-2xl font-bold text-slate-900">
-                  Competitor Details
-                </h3>
+                <div className="rounded-full bg-slate-100 px-4 py-2 text-sm font-bold text-slate-700">
+                  {result.competitorCount} found
+                </div>
 
               </div>
 
-              {Array.isArray(
-                result.competitors
-              ) &&
-              result.competitors.length >
-                0 ? (
+              {result.competitors.length > 0 ? (
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="mt-6 grid gap-3 md:grid-cols-2">
 
-                  {result.competitors.map(
-                    (
-                      competitor: Competitor,
-                      index: number
-                    ) => (
+                  {result.competitors
+                    .slice(0, 12)
+                    .map(
+                      (
+                        competitor,
+                        index
+                      ) => (
 
-                      <div
-                        key={`${competitor.name}-${competitor.latitude}-${competitor.longitude}-${index}`}
-                        className="group rounded-2xl border border-slate-200 bg-slate-50 p-5 transition duration-300 hover:-translate-y-1 hover:border-blue-200 hover:bg-white hover:shadow-lg"
-                      >
+                        <div
+                          key={`${competitor.name}-${competitor.latitude}-${competitor.longitude}-${index}`}
+                          className="rounded-2xl border border-slate-100 bg-slate-50 p-4"
+                        >
 
-                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex gap-3">
 
-                          <div className="flex min-w-0 gap-3">
-
-                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-900 text-lg text-white">
-                              ⌂
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-lg shadow-sm">
+                              🏪
                             </div>
 
                             <div className="min-w-0">
 
-                              <p className="truncate font-bold text-slate-800">
+                              <h4 className="truncate text-sm font-bold text-slate-800">
                                 {competitor.name ||
                                   "Nearby Business"}
+                              </h4>
+
+                              <p className="mt-1 text-xs text-slate-500">
+                                {competitor.category ||
+                                  "Business"}
                               </p>
 
-                              {competitor.category && (
-                                <p className="mt-1 text-xs font-medium text-blue-600">
-                                  {competitor.category}
+                              {competitor.address && (
+                                <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-400">
+                                  {competitor.address}
+                                </p>
+                              )}
+
+                              {typeof competitor.distance_km ===
+                                "number" && (
+                                <p className="mt-2 text-xs font-semibold text-slate-600">
+                                  {competitor.distance_km.toFixed(
+                                    2
+                                  )}{" "}
+                                  km away
                                 </p>
                               )}
 
@@ -1587,69 +1383,25 @@ export default function Home() {
 
                           </div>
 
-                          {typeof competitor.distance_m ===
-                            "number" && (
-
-                            <span className="shrink-0 rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-600 shadow-sm">
-
-                              {(
-                                competitor.distance_m /
-                                1000
-                              ).toFixed(2)}{" "}
-                              km
-
-                            </span>
-
-                          )}
-
                         </div>
 
-                        {competitor.address && (
-
-                          <p className="mt-4 text-sm leading-6 text-slate-500">
-                            {competitor.address}
-                          </p>
-
-                        )}
-
-                      </div>
-
-                    )
-                  )}
+                      )
+                    )}
 
                 </div>
 
               ) : (
 
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
+                <div className="mt-6 rounded-2xl bg-slate-50 p-6 text-center">
 
-                  <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-2xl shadow-sm">
-                    ⌖
-                  </div>
-
-                  <p className="mt-4 font-bold text-slate-700">
-                    No competitors found
+                  <p className="text-sm font-bold text-slate-700">
+                    No nearby competitors returned.
                   </p>
 
-                  <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
-
-                    No matching businesses were
-                    returned within the selected
-                    10 km search area.
-
+                  <p className="mt-1 text-xs text-slate-400">
+                    The map will still show your selected
+                    location.
                   </p>
-
-                  {result.competitor_data_availability ===
-                    "LIMITED" && (
-
-                    <p className="mt-3 text-xs font-semibold text-amber-600">
-
-                      Competitor data availability is
-                      currently limited.
-
-                    </p>
-
-                  )}
 
                 </div>
 
@@ -1657,74 +1409,75 @@ export default function Home() {
 
             </div>
 
-            {/* RISK & SAFETY */}
+            {/* =================================================
+                GEMINI
+            ================================================== */}
 
-            <div className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+            <div className="mt-12">
 
-              <div className="mb-6">
+              <SectionHeading
+                eyebrow="GENERATIVE AI"
+                title="Gemini business advisor"
+                description="AI-generated insights based on your business and local market."
+              />
 
-                <p className="text-sm font-semibold uppercase tracking-wider text-emerald-600">
-                  Environmental intelligence
-                </p>
+              <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-950 p-6 text-white shadow-xl sm:p-8">
 
-                <h3 className="mt-1 text-2xl font-bold text-slate-900">
-                  Risk & Safety
-                </h3>
+                <div className="flex items-center justify-between gap-4">
 
-              </div>
+                  <div className="flex items-center gap-3">
 
-              <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 text-xl">
+                      ✦
+                    </div>
 
-                <div className="rounded-2xl bg-slate-50 p-5">
+                    <div>
 
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                    Risk Safety Score
-                  </p>
+                      <h3 className="font-bold">
+                        AI Business Advisor
+                      </h3>
 
-                  <p className="mt-3 text-4xl font-black text-slate-900">
+                      <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                        Powered by{" "}
+                        {result.ai?.provider ||
+                          "Gemini"}
+                      </p>
 
-                    {result.risk_safety ??
-                      "--"}
-
-                    <span className="ml-1 text-lg font-medium text-slate-400">
-                      /100
-                    </span>
-
-                  </p>
-
-                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-200">
-
-                    <div
-                      className="h-full rounded-full bg-emerald-500 transition-all duration-700"
-                      style={{
-                        width: `${clamp(
-                          Number(
-                            result.risk_safety ??
-                              0
-                          )
-                        )}%`,
-                      }}
-                    />
+                    </div>
 
                   </div>
 
+                  {result.apiStatus?.gemini && (
+                    <span className="rounded-full bg-emerald-400/10 px-3 py-1.5 text-xs font-bold text-emerald-300">
+                      ● Connected
+                    </span>
+                  )}
+
                 </div>
 
-                <div className="rounded-2xl bg-slate-50 p-5">
+                <div className="mt-7">
 
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                    Data Source
-                  </p>
+                  {result.aiRecommendation ||
+                  result.geminiRecommendation ||
+                  result.ai?.recommendation ? (
 
-                  <p className="mt-3 text-xl font-bold text-slate-800">
-                    {result.risk_data_source ||
-                      "Not available"}
-                  </p>
+                    <div className="whitespace-pre-wrap text-sm leading-7 text-slate-300">
+                      {String(
+                        result.aiRecommendation ||
+                          result.geminiRecommendation ||
+                          result.ai?.recommendation ||
+                          ""
+                      )}
+                    </div>
 
-                  <p className="mt-2 text-sm text-slate-500">
-                    Weather and local safety
-                    assessment.
-                  </p>
+                  ) : (
+
+                    <p className="text-sm text-slate-400">
+                      Gemini AI analysis is not available
+                      for this result.
+                    </p>
+
+                  )}
 
                 </div>
 
@@ -1732,245 +1485,302 @@ export default function Home() {
 
             </div>
 
+            {/* =================================================
+                API STATUS
+            ================================================== */}
+
+            <div className="mt-8 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+
+              <div className="mb-4">
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-400">
+                  SYSTEM STATUS
+                </p>
+
+                <h3 className="mt-1 font-bold">
+                  Data sources
+                </h3>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+
+                <StatusItem
+                  name="Geoapify"
+                  active={
+                    result.apiStatus?.geoapify
+                  }
+                />
+
+                <StatusItem
+                  name="Ola Maps"
+                  active={
+                    result.apiStatus?.olaMaps
+                  }
+                />
+
+                <StatusItem
+                  name="Gemini AI"
+                  active={
+                    result.apiStatus?.gemini
+                  }
+                />
+
+                <StatusItem
+                  name="Weather"
+                  active={
+                    result.apiStatus?.weather
+                  }
+                />
+
+              </div>
+
+            </div>
+
+            {/* =================================================
+                NEW ANALYSIS
+            ================================================== */}
+
+            <div className="mt-10 text-center">
+
+              <button
+                type="button"
+                onClick={
+                  handleNewAnalysis
+                }
+                className="rounded-2xl border border-slate-200 bg-white px-6 py-3 text-sm font-bold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+              >
+                ← Start New Analysis
+              </button>
+
+            </div>
+
           </div>
 
-        )}
-
-      </div>
+        </section>
+      )}
 
     </main>
   );
 }
 
-/* =========================================================
-   INPUT CLASS
-========================================================= */
+/* ===========================================================
+   REUSABLE COMPONENTS
+=========================================================== */
 
-const inputClass =
-  "w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-sm font-medium text-slate-900 outline-none transition duration-200 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10";
-
-/* =========================================================
-   INPUT FIELD
-========================================================= */
-
-function InputField({
+function InfoCard({
   label,
-  required = false,
-  children,
+  value,
 }: {
   label: string;
-  required?: boolean;
-  children: React.ReactNode;
+  value?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+
+      <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+        {label}
+      </p>
+
+      <p className="mt-2 break-words text-sm font-bold text-slate-800">
+        {value || "Not available"}
+      </p>
+
+    </div>
+  );
+}
+
+/* ===========================================================
+   SCORE CARD
+=========================================================== */
+
+function ScoreCard({
+  icon,
+  title,
+  subtitle,
+  value,
+}: {
+  icon: string;
+  title: string;
+  subtitle: string;
+  value: number;
+}) {
+  const safeValue = Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(
+        Number.isFinite(
+          Number(value)
+        )
+          ? Number(value)
+          : 0
+      )
+    )
+  );
+
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+
+      <div className="flex items-start justify-between gap-3">
+
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-lg">
+          {icon}
+        </div>
+
+        <span className="text-2xl font-black">
+          {safeValue}
+        </span>
+
+      </div>
+
+      <h3 className="mt-5 text-sm font-bold text-slate-800">
+        {title}
+      </h3>
+
+      <p className="mt-1 text-xs leading-5 text-slate-400">
+        {subtitle}
+      </p>
+
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-slate-100">
+
+        <div
+          className="h-full rounded-full bg-slate-900"
+          style={{
+            width: `${safeValue}%`,
+          }}
+        />
+
+      </div>
+
+      <p className="mt-2 text-right text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        / 100
+      </p>
+
+    </div>
+  );
+}
+
+/* ===========================================================
+   SECTION HEADING
+=========================================================== */
+
+function SectionHeading({
+  eyebrow,
+  title,
+  description,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
 }) {
   return (
     <div>
 
-      <label className="mb-2 block text-sm font-bold text-slate-700">
+      <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
+        {eyebrow}
+      </p>
 
-        {label}
-
-        {required && (
-          <span className="ml-1 text-blue-600">
-            *
-          </span>
-        )}
-
-      </label>
-
-      {children}
-
-    </div>
-  );
-}
-
-/* =========================================================
-   SCORE CARD
-========================================================= */
-
-function ScoreCard({
-  title,
-  value,
-  description,
-  icon,
-  showBar = true,
-  type = "positive",
-  status,
-  suffix,
-}: {
-  title: string;
-  value:
-    | number
-    | string
-    | null
-    | undefined;
-  description: string;
-  icon: string;
-  showBar?: boolean;
-  type?:
-    | "positive"
-    | "competition"
-    | "profit"
-    | "safety"
-    | "population"
-    | "purchasing";
-  status?: string;
-  suffix?: string;
-}) {
-  const numericValue =
-    typeof value === "number"
-      ? value
-      : Number(value);
-
-  const safeValue =
-    Number.isFinite(
-      numericValue
-    )
-      ? numericValue
-      : 0;
-
-  let iconClass =
-    "bg-blue-50 text-blue-600";
-
-  let barClass =
-    "bg-blue-600";
-
-  if (type === "profit") {
-    iconClass =
-      "bg-violet-50 text-violet-600";
-
-    barClass =
-      "bg-violet-600";
-  }
-
-  if (type === "safety") {
-    iconClass =
-      "bg-emerald-50 text-emerald-600";
-
-    barClass =
-      "bg-emerald-500";
-  }
-
-  if (type === "competition") {
-    iconClass =
-      "bg-orange-50 text-orange-600";
-
-    barClass =
-      "bg-orange-500";
-  }
-
-  if (type === "population") {
-    iconClass =
-      "bg-indigo-50 text-indigo-600";
-
-    barClass =
-      "bg-indigo-600";
-  }
-
-  if (type === "purchasing") {
-    iconClass =
-      "bg-amber-50 text-amber-600";
-
-    barClass =
-      "bg-amber-500";
-  }
-
-  return (
-    <div className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-300 hover:-translate-y-1 hover:shadow-xl">
-
-      <div className="flex items-start justify-between">
-
-        <div
-          className={`flex h-11 w-11 items-center justify-center rounded-xl text-lg font-bold ${iconClass}`}
-        >
-          {icon}
-        </div>
-
-        <div className="text-right">
-
-          <p className="text-2xl font-black text-slate-900">
-
-            {value ?? "--"}
-
-            {suffix && (
-              <span className="ml-1 text-sm font-bold text-slate-400">
-                {suffix}
-              </span>
-            )}
-
-          </p>
-
-          {showBar &&
-            typeof value ===
-              "number" && (
-
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                /100
-              </p>
-
-            )}
-
-        </div>
-
-      </div>
-
-      <h4 className="mt-5 font-bold text-slate-800">
+      <h2 className="mt-2 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">
         {title}
-      </h4>
+      </h2>
 
-      <p className="mt-1 text-xs leading-5 text-slate-500">
+      <p className="mt-2 text-sm leading-6 text-slate-500">
         {description}
       </p>
 
-      {status && (
-        <div className="mt-4">
+    </div>
+  );
+}
 
-          <span className="inline-flex rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-700">
-            {status}
-          </span>
+/* ===========================================================
+   INSIGHT CARD
+=========================================================== */
 
-        </div>
+function InsightCard({
+  title,
+  value,
+  score,
+  subtitle,
+}: {
+  title: string;
+  value: string;
+  score?: number;
+  subtitle?: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+
+      <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+        {title}
+      </p>
+
+      <p className="mt-3 break-words text-base font-black text-slate-800">
+        {value}
+      </p>
+
+      {subtitle && (
+        <p className="mt-1 text-xs text-slate-400">
+          {subtitle}
+        </p>
       )}
 
-      {showBar && (
+      {typeof score === "number" && (
+        <div className="mt-4">
 
-        <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
+          <div className="flex justify-between text-xs font-bold text-slate-400">
+            <span>Indicator</span>
+            <span>{score}/100</span>
+          </div>
 
-          <div
-            className={`h-full rounded-full ${barClass} transition-all duration-700 ease-out`}
-            style={{
-              width: `${clamp(
-                safeValue
-              )}%`,
-            }}
-          />
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+
+            <div
+              className="h-full rounded-full bg-slate-900"
+              style={{
+                width: `${Math.max(
+                  0,
+                  Math.min(100, score)
+                )}%`,
+              }}
+            />
+
+          </div>
 
         </div>
-
       )}
 
     </div>
   );
 }
 
-/* =========================================================
-   MINI STAT
-========================================================= */
+/* ===========================================================
+   WEATHER CARD
+=========================================================== */
 
-function MiniStat({
+function WeatherCard({
+  icon,
   label,
   value,
 }: {
+  icon: string;
   label: string;
   value: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+    <div className="rounded-2xl border border-slate-200 bg-white p-5">
 
-      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        {label}
-      </p>
+      <div className="flex items-center gap-3">
 
-      <p className="mt-1 truncate text-sm font-bold text-slate-700">
+        <span className="text-xl">
+          {icon}
+        </span>
+
+        <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+          {label}
+        </span>
+
+      </div>
+
+      <p className="mt-4 text-lg font-black text-slate-800">
         {value}
       </p>
 
@@ -1978,290 +1788,36 @@ function MiniStat({
   );
 }
 
-/* =========================================================
-   FEASIBILITY CIRCLE
-========================================================= */
+/* ===========================================================
+   STATUS ITEM
+=========================================================== */
 
-function FeasibilityCircle({
-  score,
+function StatusItem({
+  name,
+  active,
 }: {
-  score:
-    | number
-    | string
-    | null
-    | undefined;
+  name: string;
+  active?: boolean;
 }) {
-  const numericScore =
-    typeof score === "number"
-      ? score
-      : Number(score);
-
-  const safeScore =
-    Number.isFinite(
-      numericScore
-    )
-      ? numericScore
-      : 0;
-
-  let ringClass = "";
-
-  if (safeScore >= 75) {
-    ringClass =
-      "from-emerald-400 via-green-500 to-teal-500";
-  } else if (safeScore >= 50) {
-    ringClass =
-      "from-amber-300 via-orange-400 to-amber-500";
-  } else {
-    ringClass =
-      "from-rose-400 via-red-500 to-pink-500";
-  }
-
   return (
-    <div className="relative flex h-64 w-64 items-center justify-center sm:h-72 sm:w-72">
+    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3">
 
-      <div
-        className={`absolute inset-0 rounded-full bg-gradient-to-br ${ringClass} opacity-20 blur-2xl`}
-      />
+      <span className="text-sm font-semibold text-slate-700">
+        {name}
+      </span>
 
-      <div
-        className={`relative flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br ${ringClass} p-2 shadow-2xl`}
+      <span
+        className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${
+          active
+            ? "bg-emerald-100 text-emerald-700"
+            : "bg-red-100 text-red-600"
+        }`}
       >
-
-        <div className="flex h-full w-full flex-col items-center justify-center rounded-full bg-white">
-
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">
-            Feasibility
-          </p>
-
-          <div className="mt-2 flex items-baseline">
-
-            <span className="text-5xl font-black tracking-tight text-slate-950 sm:text-6xl">
-
-              {Number.isInteger(
-                safeScore
-              )
-                ? safeScore
-                : safeScore.toFixed(
-                    2
-                  )}
-
-            </span>
-
-            <span className="ml-1 text-xl font-bold text-slate-400">
-              /100
-            </span>
-
-          </div>
-
-          <div className="mt-3 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500">
-            {getScoreLabel(
-              safeScore
-            )}
-          </div>
-
-        </div>
-
-      </div>
+        {active
+          ? "CONNECTED"
+          : "UNAVAILABLE"}
+      </span>
 
     </div>
-  );
-}
-
-/* =========================================================
-   PURCHASING POWER STATUS
-========================================================= */
-
-function getPurchasingPowerStatus(
-  result: AnalysisResult
-): string {
-  if (
-    result.purchasing_power_level
-  ) {
-    return result.purchasing_power_level;
-  }
-
-  const score = Number(
-    result.purchasing_power
-  );
-
-  if (!Number.isFinite(score)) {
-    return "--";
-  }
-
-  if (score >= 70) {
-    return "Good";
-  }
-
-  return "Moderate";
-}
-
-/* =========================================================
-   WEATHER CONDITION
-========================================================= */
-
-function getWeatherCondition(
-  weatherCode?: number
-): string {
-  if (
-    weatherCode === undefined
-  ) {
-    return "Normal";
-  }
-
-  if (weatherCode === 0) {
-    return "Normal";
-  }
-
-  if (
-    weatherCode >= 1 &&
-    weatherCode <= 3
-  ) {
-    return "Cloudy";
-  }
-
-  if (
-    weatherCode >= 45 &&
-    weatherCode <= 48
-  ) {
-    return "Foggy";
-  }
-
-  if (
-    (weatherCode >= 51 &&
-      weatherCode <= 67) ||
-    (weatherCode >= 80 &&
-      weatherCode <= 82)
-  ) {
-    return "Rainy";
-  }
-
-  if (
-    (weatherCode >= 71 &&
-      weatherCode <= 77) ||
-    weatherCode === 85 ||
-    weatherCode === 86
-  ) {
-    return "Snowy";
-  }
-
-  if (
-    weatherCode >= 95 &&
-    weatherCode <= 99
-  ) {
-    return "Stormy";
-  }
-
-  return "Normal";
-}
-
-/* =========================================================
-   FEASIBILITY HELPERS
-========================================================= */
-
-function getFeasibilityScore(
-  result: AnalysisResult
-): number | string {
-  if (
-    result.feasibility &&
-    typeof result.feasibility ===
-      "object"
-  ) {
-    return (
-      result.feasibility
-        .feasibility_score ??
-      result.feasibility.score ??
-      "--"
-    );
-  }
-
-  if (
-    typeof result.feasibility ===
-    "number"
-  ) {
-    return result.feasibility;
-  }
-
-  return "--";
-}
-
-/* =========================================================
-   RECOMMENDATION
-========================================================= */
-
-function getRecommendation(
-  result: AnalysisResult
-): string {
-  if (
-    result.feasibility &&
-    typeof result.feasibility ===
-      "object"
-  ) {
-    return (
-      result.feasibility
-        .recommendation ??
-      getScoreLabel(
-        Number(
-          result.feasibility
-            .feasibility_score ??
-            0
-        )
-      )
-    );
-  }
-
-  if (
-    typeof result.feasibility ===
-    "number"
-  ) {
-    return getScoreLabel(
-      result.feasibility
-    );
-  }
-
-  return "--";
-}
-
-/* =========================================================
-   SCORE LABEL
-========================================================= */
-
-function getScoreLabel(
-  score: number
-): string {
-  if (score >= 80) {
-    return "Excellent Opportunity";
-  }
-
-  if (score >= 65) {
-    return "Good Opportunity";
-  }
-
-  if (score >= 50) {
-    return "Moderate Opportunity";
-  }
-
-  if (score >= 35) {
-    return "Needs Evaluation";
-  }
-
-  return "High Risk";
-}
-
-/* =========================================================
-   CLAMP
-========================================================= */
-
-function clamp(
-  value: number
-): number {
-  if (
-    !Number.isFinite(value)
-  ) {
-    return 0;
-  }
-
-  return Math.min(
-    Math.max(value, 0),
-    100
   );
 }

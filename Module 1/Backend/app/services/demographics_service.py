@@ -1,7 +1,6 @@
 import httpx
 import asyncio
 import json
-import math
 
 
 # ============================================================
@@ -11,11 +10,29 @@ import math
 WORLDPOP_URL = "https://api.worldpop.org/v1/services/stats"
 
 WORLD_BANK_URL = (
-    "https://api.worldbank.org/v2/country/IND/indicator/NY.GDP.PCAP.PP.CD"
+    "https://api.worldbank.org/v2/country/IND/indicator/"
+    "NY.GDP.PCAP.PP.CD"
 )
 
-# OpenStreetMap / Overpass
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Multiple Overpass servers
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+
+
+# ============================================================
+# COMMON HEADERS
+# ============================================================
+
+HEADERS = {
+    "User-Agent": (
+        "AI-Rural-Business-Advisory/1.0 "
+        "(educational-project)"
+    ),
+    "Accept": "application/json",
+}
 
 
 # ============================================================
@@ -80,8 +97,17 @@ async def get_population_density(
             "runasync": "false",
         }
 
+        timeout = httpx.Timeout(
+            connect=5.0,
+            read=30.0,
+            write=10.0,
+            pool=5.0,
+        )
+
         async with httpx.AsyncClient(
-            timeout=30.0
+            timeout=timeout,
+            follow_redirects=True,
+            headers=HEADERS,
         ) as client:
 
             response = await client.get(
@@ -101,7 +127,10 @@ async def get_population_density(
 
         if isinstance(data, dict):
 
-            api_data = data.get("data", {})
+            api_data = data.get(
+                "data",
+                {}
+            )
 
             if isinstance(api_data, dict):
 
@@ -119,7 +148,7 @@ async def get_population_density(
         population = float(population)
 
         # ----------------------------------------------------
-        # Approximate area
+        # Area
         # ----------------------------------------------------
 
         area_km2 = 16.0
@@ -127,22 +156,26 @@ async def get_population_density(
         density = population / area_km2
 
         # ----------------------------------------------------
-        # Dashboard score: 0–100
+        # Convert actual density to score
         # ----------------------------------------------------
 
         if density < 500:
+
             density_score = 20
             density_level = "LOW"
 
         elif density < 1500:
+
             density_score = 40
             density_level = "MODERATE"
 
         elif density < 3000:
+
             density_score = 70
             density_level = "HIGH"
 
         else:
+
             density_score = 90
             density_level = "VERY HIGH"
 
@@ -206,11 +239,11 @@ async def get_population_density(
 # ============================================================
 
 async def get_india_gdp_ppp():
-    """
-    Get India's GDP per-capita PPP.
 
-    IMPORTANT:
-    This is only used as a national economic baseline.
+    """
+    Get India's GDP-per-capita PPP.
+
+    This is used only as a national economic baseline.
     It is NOT local PIN-code income.
     """
 
@@ -218,11 +251,20 @@ async def get_india_gdp_ppp():
 
         params = {
             "format": "json",
-            "per_page": 10,
+            "per_page": 20,
         }
 
+        timeout = httpx.Timeout(
+            connect=5.0,
+            read=20.0,
+            write=10.0,
+            pool=5.0,
+        )
+
         async with httpx.AsyncClient(
-            timeout=20.0
+            timeout=timeout,
+            follow_redirects=True,
+            headers=HEADERS,
         ) as client:
 
             response = await client.get(
@@ -238,19 +280,42 @@ async def get_india_gdp_ppp():
             not isinstance(data, list)
             or len(data) < 2
         ):
+
             return None, None
 
         records = data[1]
 
+        if not isinstance(records, list):
+
+            return None, None
+
+        # ----------------------------------------------------
+        # Find latest available value
+        # ----------------------------------------------------
+
         for record in records:
 
-            value = record.get("value")
+            if not isinstance(record, dict):
+                continue
 
+            value = record.get("value")
             year = record.get("date")
 
             if value is not None:
 
-                return float(value), year
+                try:
+
+                    return (
+                        float(value),
+                        year
+                    )
+
+                except (
+                    TypeError,
+                    ValueError
+                ):
+
+                    continue
 
         return None, None
 
@@ -276,7 +341,7 @@ async def get_local_business_activity(
     Estimate local economic activity using nearby
     OpenStreetMap businesses/amenities.
 
-    This is used only as a LOCAL ECONOMIC ACTIVITY PROXY.
+    This is a LOCAL ECONOMIC ACTIVITY PROXY.
     It is not actual household income.
     """
 
@@ -285,57 +350,114 @@ async def get_local_business_activity(
         latitude = float(latitude)
         longitude = float(longitude)
 
-        # ----------------------------------------------------
-        # Search approximately 5 km around location
-        # ----------------------------------------------------
-
         radius = 5000
 
         query = f"""
-        [out:json][timeout:20];
+        [out:json][timeout:30];
 
         (
-          node["shop"](around:{radius},{latitude},{longitude});
-          way["shop"](around:{radius},{latitude},{longitude});
+            node["shop"](around:{radius},{latitude},{longitude});
+            way["shop"](around:{radius},{latitude},{longitude});
+            relation["shop"](around:{radius},{latitude},{longitude});
 
-          node["amenity"="restaurant"](around:{radius},{latitude},{longitude});
-          way["amenity"="restaurant"](around:{radius},{latitude},{longitude});
+            node["amenity"="restaurant"](around:{radius},{latitude},{longitude});
+            way["amenity"="restaurant"](around:{radius},{latitude},{longitude});
+            relation["amenity"="restaurant"](around:{radius},{latitude},{longitude});
 
-          node["amenity"="cafe"](around:{radius},{latitude},{longitude});
-          way["amenity"="cafe"](around:{radius},{latitude},{longitude});
+            node["amenity"="cafe"](around:{radius},{latitude},{longitude});
+            way["amenity"="cafe"](around:{radius},{latitude},{longitude});
+            relation["amenity"="cafe"](around:{radius},{latitude},{longitude});
 
-          node["amenity"="bank"](around:{radius},{latitude},{longitude});
-          way["amenity"="bank"](around:{radius},{latitude},{longitude});
+            node["amenity"="bank"](around:{radius},{latitude},{longitude});
+            way["amenity"="bank"](around:{radius},{latitude},{longitude});
+            relation["amenity"="bank"](around:{radius},{latitude},{longitude});
         );
 
         out center;
         """
 
-        async with httpx.AsyncClient(
-            timeout=30.0
-        ) as client:
-
-            response = await client.post(
-                OVERPASS_URL,
-                data=query,
-            )
-
-            response.raise_for_status()
-
-            data = response.json()
-
-        elements = data.get(
-            "elements",
-            []
+        timeout = httpx.Timeout(
+            connect=8.0,
+            read=35.0,
+            write=15.0,
+            pool=8.0,
         )
 
-        if not isinstance(elements, list):
+        # ----------------------------------------------------
+        # Try multiple Overpass servers
+        # ----------------------------------------------------
 
-            elements = []
+        for overpass_url in OVERPASS_URLS:
 
-        return len(elements)
+            try:
 
-    except httpx.TimeoutException:
+                print(
+                    "Purchasing power - trying Overpass:",
+                    overpass_url
+                )
+
+                async with httpx.AsyncClient(
+                    timeout=timeout,
+                    follow_redirects=True,
+                    headers=HEADERS,
+                ) as client:
+
+                    response = await client.post(
+                        overpass_url,
+                        data=query,
+                        headers={
+                            **HEADERS,
+                            "Content-Type":
+                                "application/x-www-form-urlencoded",
+                        },
+                    )
+
+                    response.raise_for_status()
+
+                    data = response.json()
+
+                elements = data.get(
+                    "elements",
+                    []
+                )
+
+                if not isinstance(elements, list):
+
+                    elements = []
+
+                # ------------------------------------------------
+                # Remove duplicate OSM objects
+                # ------------------------------------------------
+
+                unique_ids = set()
+
+                for element in elements:
+
+                    element_id = (
+                        element.get("type"),
+                        element.get("id")
+                    )
+
+                    unique_ids.add(element_id)
+
+                count = len(unique_ids)
+
+                print(
+                    "Local economic activity:",
+                    count
+                )
+
+                return count
+
+            except Exception as e:
+
+                print(
+                    "Overpass failed:",
+                    overpass_url,
+                    str(e)
+                )
+
+                continue
 
         return None
 
@@ -350,6 +472,150 @@ async def get_local_business_activity(
 
 
 # ============================================================
+# PURCHASING POWER SCORE
+# ============================================================
+
+def calculate_purchasing_power_score(
+    india_gdp_ppp,
+    local_business_count,
+):
+    """
+    Calculate a location-sensitive purchasing-power proxy.
+
+    IMPORTANT:
+    This is NOT actual household income.
+
+    World Bank:
+        National PPP baseline.
+
+    OpenStreetMap:
+        Local economic activity proxy.
+    """
+
+    # --------------------------------------------------------
+    # BASE SCORE
+    # --------------------------------------------------------
+
+    if india_gdp_ppp is None:
+
+        base_score = 50.0
+
+    else:
+
+        try:
+
+            india_gdp_ppp = float(
+                india_gdp_ppp
+            )
+
+            # Normalize national PPP baseline.
+            #
+            # 30,000 PPP = 100 reference score.
+            #
+
+            base_score = (
+                india_gdp_ppp / 30000.0
+            ) * 100.0
+
+            base_score = max(
+                20.0,
+                min(
+                    base_score,
+                    80.0
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError
+        ):
+
+            base_score = 50.0
+
+    # --------------------------------------------------------
+    # LOCAL ACTIVITY ADJUSTMENT
+    # --------------------------------------------------------
+
+    if local_business_count is None:
+
+        local_adjustment = 0.0
+
+    else:
+
+        count = int(
+            local_business_count
+        )
+
+        if count <= 10:
+
+            local_adjustment = -5.0
+
+        elif count <= 30:
+
+            local_adjustment = 0.0
+
+        elif count <= 60:
+
+            local_adjustment = 5.0
+
+        elif count <= 100:
+
+            local_adjustment = 10.0
+
+        elif count <= 200:
+
+            local_adjustment = 15.0
+
+        else:
+
+            local_adjustment = 20.0
+
+    # --------------------------------------------------------
+    # FINAL SCORE
+    # --------------------------------------------------------
+
+    score = (
+        base_score
+        +
+        local_adjustment
+    )
+
+    score = max(
+        0.0,
+        min(
+            score,
+            100.0
+        )
+    )
+
+    return round(
+        score,
+        2
+    )
+
+
+# ============================================================
+# PURCHASING POWER LEVEL
+# ============================================================
+
+def get_purchasing_power_level(
+    score: float,
+):
+
+    if score >= 70:
+
+        return "HIGH"
+
+    elif score >= 40:
+
+        return "MODERATE"
+
+    else:
+
+        return "LOW"
+
+
+# ============================================================
 # PURCHASING POWER
 # ============================================================
 
@@ -358,15 +624,15 @@ async def get_purchasing_power(
     longitude: float,
 ):
     """
-    Estimate a location-sensitive purchasing-power score.
+    Estimate location-sensitive purchasing power.
 
-    World Bank provides India's national GDP-per-capita PPP.
-    Since it does not provide PIN-level purchasing power,
-    nearby economic activity from OpenStreetMap is used
-    as a local proxy.
+    World Bank:
+        National PPP baseline.
 
-    IMPORTANT:
-    This is a proxy score, NOT exact household income.
+    OpenStreetMap:
+        Local economic activity proxy.
+
+    This is a proxy score and not actual household income.
     """
 
     try:
@@ -375,7 +641,7 @@ async def get_purchasing_power(
         longitude = float(longitude)
 
         # ----------------------------------------------------
-        # Get national baseline and local activity together
+        # Run both APIs simultaneously
         # ----------------------------------------------------
 
         india_task = get_india_gdp_ppp()
@@ -387,113 +653,71 @@ async def get_purchasing_power(
             )
         )
 
-        india_result, local_business_count = (
-            await asyncio.gather(
-                india_task,
-                local_activity_task,
-            )
+        (
+            india_result,
+            local_business_count,
+        ) = await asyncio.gather(
+            india_task,
+            local_activity_task,
         )
 
-        india_gdp_ppp, india_year = india_result
+        india_gdp_ppp, india_year = (
+            india_result
+        )
 
         # ----------------------------------------------------
-        # Base score
-        #
-        # This maps India's GDP PPP baseline into
-        # a reasonable 0–100 dashboard score.
-        #
-        # It is deliberately capped.
+        # Calculate score
         # ----------------------------------------------------
-
-        if india_gdp_ppp is None:
-
-            base_score = 50
-
-        else:
-
-            # Reference range for normalization.
-            # This is a proxy normalization, not income data.
-            base_score = (
-                india_gdp_ppp / 30000
-            ) * 100
-
-            base_score = max(
-                20,
-                min(base_score, 80)
-            )
-
-        # ----------------------------------------------------
-        # LOCAL ECONOMIC ACTIVITY ADJUSTMENT
-        #
-        # More nearby businesses/services can indicate
-        # stronger commercial activity.
-        #
-        # This does NOT mean businesses = income.
-        # It is only a local proxy.
-        # ----------------------------------------------------
-
-        if local_business_count is None:
-
-            local_adjustment = 0
-
-        else:
-
-            if local_business_count <= 20:
-                local_adjustment = -15
-
-            elif local_business_count <= 50:
-                local_adjustment = -5
-
-            elif local_business_count <= 100:
-                local_adjustment = 5
-
-            elif local_business_count <= 200:
-                local_adjustment = 10
-
-            else:
-                local_adjustment = 15
 
         purchasing_power = (
-            base_score +
-            local_adjustment
-        )
-
-        # ----------------------------------------------------
-        # Keep score between 0 and 100
-        # ----------------------------------------------------
-
-        purchasing_power = max(
-            0,
-            min(
-                purchasing_power,
-                100
+            calculate_purchasing_power_score(
+                india_gdp_ppp,
+                local_business_count,
             )
         )
 
-        purchasing_power = round(
-            purchasing_power,
-            2
+        level = (
+            get_purchasing_power_level(
+                purchasing_power
+            )
         )
 
-        # ----------------------------------------------------
-        # Dashboard label
-        # ----------------------------------------------------
+        print(
+            "----------------------------------------"
+        )
 
-        if purchasing_power >= 70:
+        print(
+            "PURCHASING POWER"
+        )
 
-            level = "HIGH"
+        print(
+            "India GDP PPP:",
+            india_gdp_ppp
+        )
 
-        elif purchasing_power >= 40:
+        print(
+            "World Bank year:",
+            india_year
+        )
 
-            level = "MODERATE"
+        print(
+            "Local businesses:",
+            local_business_count
+        )
 
-        else:
+        print(
+            "Purchasing power score:",
+            purchasing_power
+        )
 
-            level = "LOW"
+        print(
+            "Purchasing power level:",
+            level
+        )
 
-        # ----------------------------------------------------
-        # Return
-        # ----------------------------------------------------
+        print(
+            "----------------------------------------"
+        )
 
         return {
 
@@ -508,17 +732,26 @@ async def get_purchasing_power(
             "purchasing_power_level":
                 level,
 
+            # Keep this TRUE because the value
+            # is a proxy rather than actual income.
+
             "purchasing_power_proxy":
                 True,
 
             "purchasing_power_data_source":
-                "World Bank + OpenStreetMap local economic activity",
+                (
+                    "World Bank + "
+                    "OpenStreetMap local economic activity"
+                ),
 
             "purchasing_power_year":
                 india_year,
 
             "local_business_activity":
                 local_business_count,
+
+            "india_gdp_ppp":
+                india_gdp_ppp,
 
         }
 
@@ -559,21 +792,30 @@ async def get_demographic_analysis(
     longitude: float,
 ):
 
-    population_task = get_population_density(
-        latitude,
-        longitude,
-    )
+    # --------------------------------------------------------
+    # Run population and purchasing power together
+    # --------------------------------------------------------
 
-    purchasing_task = get_purchasing_power(
-        latitude,
-        longitude,
-    )
-
-    population_result, purchasing_result = (
-        await asyncio.gather(
-            population_task,
-            purchasing_task,
+    population_task = (
+        get_population_density(
+            latitude,
+            longitude,
         )
+    )
+
+    purchasing_task = (
+        get_purchasing_power(
+            latitude,
+            longitude,
+        )
+    )
+
+    (
+        population_result,
+        purchasing_result,
+    ) = await asyncio.gather(
+        population_task,
+        purchasing_task,
     )
 
     return {

@@ -1,14 +1,17 @@
 import asyncio
 import math
+import json
 import httpx
 
 
 # ============================================================
-# FREE DATA SOURCES
+# API URLS
 # ============================================================
 
-WORLDPOP_API_URL = "https://api.worldpop.org/v2"
+# Correct WorldPop API
+WORLDPOP_URL = "https://api.worldpop.org/v1/services/stats"
 
+# OpenStreetMap Overpass API
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 
@@ -17,11 +20,11 @@ OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 # ============================================================
 
 def calculate_distance(
-    lat1,
-    lon1,
-    lat2,
-    lon2,
-):
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
     """
     Calculate distance between two coordinates
     using the Haversine formula.
@@ -34,37 +37,21 @@ def calculate_distance(
     lat1_rad = math.radians(lat1)
     lat2_rad = math.radians(lat2)
 
-    delta_lat = math.radians(
-        lat2 - lat1
-    )
-
-    delta_lon = math.radians(
-        lon2 - lon1
-    )
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
 
     a = (
         math.sin(delta_lat / 2) ** 2
-        +
-        math.cos(lat1_rad)
+        + math.cos(lat1_rad)
         * math.cos(lat2_rad)
         * math.sin(delta_lon / 2) ** 2
     )
 
-    # Protect against tiny floating-point errors.
-    a = min(
-        1.0,
-        max(
-            0.0,
-            a
-        )
-    )
+    a = max(0.0, min(1.0, a))
 
-    c = (
-        2
-        * math.atan2(
-            math.sqrt(a),
-            math.sqrt(1 - a)
-        )
+    c = 2 * math.atan2(
+        math.sqrt(a),
+        math.sqrt(1 - a),
     )
 
     return earth_radius * c
@@ -80,16 +67,17 @@ async def get_population_density(
     longitude: float,
 ):
     """
-    Estimate population density around the selected location.
+    Estimate population around the selected location
+    using WorldPop.
 
-    WorldPop provides population data globally.
-
-    We use approximately a 1 km x 1 km area around
-    the selected point.
+    Approximately 1 km x 1 km area is analysed.
     """
 
-    try:
+    # --------------------------------------------------------
+    # Validate coordinates
+    # --------------------------------------------------------
 
+    try:
         latitude = float(latitude)
         longitude = float(longitude)
 
@@ -102,50 +90,76 @@ async def get_population_density(
         }
 
     # --------------------------------------------------------
-    # Create approximately 1 km x 1 km square
+    # Validate coordinate range
+    # --------------------------------------------------------
+
+    if not (-90 <= latitude <= 90):
+        return {
+            "success": False,
+            "message": "Invalid latitude.",
+            "population_density": None,
+        }
+
+    if not (-180 <= longitude <= 180):
+        return {
+            "success": False,
+            "message": "Invalid longitude.",
+            "population_density": None,
+        }
+
+    # --------------------------------------------------------
+    # Approximately 1 km x 1 km square
     # --------------------------------------------------------
 
     lat_offset = 0.0045
 
-    lon_offset = (
-        0.0045 /
-        max(
-            math.cos(
-                math.radians(latitude)
-            ),
-            0.1
-        )
+    cos_lat = max(
+        abs(math.cos(math.radians(latitude))),
+        0.1,
     )
+
+    lon_offset = 0.0045 / cos_lat
 
     south = latitude - lat_offset
     north = latitude + lat_offset
     west = longitude - lon_offset
     east = longitude + lon_offset
 
-    polygon = {
-        "type": "Polygon",
-        "coordinates": [[
+    # --------------------------------------------------------
+    # GeoJSON FeatureCollection
+    # WorldPop stats API expects GeoJSON
+    # --------------------------------------------------------
 
-            [west, south],
-            [east, south],
-            [east, north],
-            [west, north],
-            [west, south],
-
-        ]]
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[
+                        [west, south],
+                        [east, south],
+                        [east, north],
+                        [west, north],
+                        [west, south],
+                    ]],
+                },
+            }
+        ],
     }
 
-    payload = {
-
-        "geojson": polygon,
-
-        # WorldPop data available through 2020
+    params = {
+        "dataset": "wpgppop",
         "year": 2020,
-
-        # 1 km resolution
-        "resolution": "1km",
-
+        "geojson": json.dumps(geojson),
+        "runasync": "false",
     }
+
+    # --------------------------------------------------------
+    # Call WorldPop
+    # --------------------------------------------------------
 
     try:
 
@@ -153,185 +167,243 @@ async def get_population_density(
             timeout=60.0
         ) as client:
 
-            # ------------------------------------------------
-            # Submit WorldPop task
-            # ------------------------------------------------
-
-            response = await client.post(
-                f"{WORLDPOP_API_URL}/population",
-                json=payload,
+            response = await client.get(
+                WORLDPOP_URL,
+                params=params,
             )
 
             response.raise_for_status()
 
             data = response.json()
 
-            task_id = data.get(
-                "task_id"
-            )
+        # ----------------------------------------------------
+        # WorldPop response format:
+        #
+        # {
+        #   "status": "finished",
+        #   "data": {
+        #       "total_population": ...
+        #   }
+        # }
+        # ----------------------------------------------------
 
-            if not task_id:
-
-                return {
-                    "success": False,
-                    "message":
-                        "WorldPop did not return a task ID.",
-                    "population_density": None,
-                }
-
-            # ------------------------------------------------
-            # Poll task
-            # ------------------------------------------------
-
-            for _ in range(30):
-
-                await asyncio.sleep(1)
-
-                result_response = await client.get(
-                    f"{WORLDPOP_API_URL}/tasks/{task_id}"
-                )
-
-                result_response.raise_for_status()
-
-                result_data = (
-                    result_response.json()
-                )
-
-                status = result_data.get(
-                    "status"
-                )
-
-                if status == "success":
-
-                    result = (
-                        result_data.get(
-                            "result",
-                            {}
-                        )
-                    )
-
-                    density = result.get(
-                        "population_density"
-                    )
-
-                    total_population = result.get(
-                        "total_population"
-                    )
-
-                    area_km2 = result.get(
-                        "area_km2"
-                    )
-
-                    if density is None:
-
-                        return {
-                            "success": False,
-                            "message":
-                                "Population density unavailable.",
-                            "population_density":
-                                None,
-                        }
-
-                    return {
-
-                        "success": True,
-
-                        "population_density":
-                            round(
-                                float(density),
-                                2
-                            ),
-
-                        "population_estimate":
-                            round(
-                                float(
-                                    total_population
-                                ),
-                                0
-                            )
-                            if total_population is not None
-                            else None,
-
-                        "area_km2":
-                            round(
-                                float(area_km2),
-                                2
-                            )
-                            if area_km2 is not None
-                            else 1.0,
-
-                        "population_data_year":
-                            2020,
-
-                        "population_data_source":
-                            "WorldPop",
-
-                    }
-
-                if status == "failure":
-
-                    return {
-                        "success": False,
-                        "message":
-                            result_data.get(
-                                "error",
-                                "WorldPop task failed."
-                            ),
-                        "population_density":
-                            None,
-                    }
+        if not isinstance(data, dict):
 
             return {
                 "success": False,
-                "message":
-                    "WorldPop request timed out.",
-                "population_density":
-                    None,
+                "message": "Invalid WorldPop response.",
+                "population_density": None,
             }
+
+        if data.get("error") is True:
+
+            return {
+                "success": False,
+                "message": data.get(
+                    "error_message",
+                    "WorldPop returned an error.",
+                ),
+                "population_density": None,
+            }
+
+        api_data = data.get(
+            "data",
+            {},
+        )
+
+        if not isinstance(api_data, dict):
+
+            return {
+                "success": False,
+                "message": "Population data unavailable.",
+                "population_density": None,
+            }
+
+        total_population = api_data.get(
+            "total_population"
+        )
+
+        if total_population is None:
+
+            return {
+                "success": False,
+                "message": "Population data unavailable.",
+                "population_density": None,
+            }
+
+        total_population = float(
+            total_population
+        )
+
+        # ----------------------------------------------------
+        # Calculate actual area
+        # ----------------------------------------------------
+
+        lat_distance = calculate_distance(
+            south,
+            longitude,
+            north,
+            longitude,
+        )
+
+        lon_distance = calculate_distance(
+            latitude,
+            west,
+            latitude,
+            east,
+        )
+
+        area_km2 = (
+            (lat_distance / 1000)
+            * (lon_distance / 1000)
+        )
+
+        if area_km2 <= 0:
+            area_km2 = 1.0
+
+        # ----------------------------------------------------
+        # Population density
+        # ----------------------------------------------------
+
+        population_density = (
+            total_population / area_km2
+        )
+
+        population_density = round(
+            population_density,
+            2,
+        )
+
+        total_population = round(
+            total_population,
+            0,
+        )
+
+        area_km2 = round(
+            area_km2,
+            2,
+        )
+
+        # ----------------------------------------------------
+        # Density score
+        # ----------------------------------------------------
+
+        if population_density < 500:
+
+            density_score = 20
+            density_level = "LOW"
+
+        elif population_density < 1500:
+
+            density_score = 40
+            density_level = "MODERATE"
+
+        elif population_density < 3000:
+
+            density_score = 70
+            density_level = "HIGH"
+
+        else:
+
+            density_score = 90
+            density_level = "VERY HIGH"
+
+        # ----------------------------------------------------
+        # Return
+        # ----------------------------------------------------
+
+        return {
+
+            "success": True,
+
+            "population_estimate":
+                total_population,
+
+            "population_density":
+                population_density,
+
+            "population_density_actual":
+                population_density,
+
+            "population_density_unit":
+                "people/km²",
+
+            "population_density_score":
+                density_score,
+
+            "population_density_level":
+                density_level,
+
+            "population_area_km2":
+                area_km2,
+
+            "population_data_year":
+                2020,
+
+            "population_data_source":
+                "WorldPop",
+
+        }
 
     except httpx.TimeoutException:
 
+        print(
+            "WorldPop timeout"
+        )
+
         return {
+
             "success": False,
+
             "message":
                 "Population service timed out.",
+
             "population_density":
                 None,
+
         }
 
     except httpx.HTTPStatusError as e:
 
         print(
             "WorldPop HTTP error:",
-            e.response.status_code
+            e.response.status_code,
         )
 
         return {
+
             "success": False,
+
             "message":
-                "Population service returned an error.",
+                "Population service returned an HTTP error.",
+
             "population_density":
                 None,
+
         }
 
     except Exception as e:
 
         print(
             "WorldPop error:",
-            e
+            repr(e),
         )
 
         return {
+
             "success": False,
+
             "message":
                 "Could not retrieve population data.",
+
             "population_density":
                 None,
+
         }
 
 
 # ============================================================
-# PURCHASING POWER PROXY
+# PURCHASING POWER / LOCAL ECONOMIC ACTIVITY
 # OPENSTREETMAP / OVERPASS
 # ============================================================
 
@@ -342,16 +414,22 @@ async def get_purchasing_power_proxy(
 ):
     """
     Estimate local purchasing-power proxy from
-    nearby economic/commercial activity.
+    mapped economic activity.
 
     IMPORTANT:
     This is NOT actual household income.
 
-    The search radius is up to 10 km.
-
-    Businesses closer to the selected location
-    have greater influence on the score.
+    It is a location-based proxy using:
+    - Banks
+    - ATMs
+    - Supermarkets
+    - Marketplaces
+    - Department stores
     """
+
+    # --------------------------------------------------------
+    # Validate coordinates
+    # --------------------------------------------------------
 
     try:
 
@@ -361,15 +439,22 @@ async def get_purchasing_power_proxy(
     except (TypeError, ValueError):
 
         return {
+
             "success": False,
+
+            "purchasing_power":
+                None,
+
             "purchasing_power_proxy":
                 None,
+
             "message":
                 "Invalid coordinates.",
+
         }
 
     # --------------------------------------------------------
-    # Protect the function from invalid radius values
+    # Validate radius
     # --------------------------------------------------------
 
     try:
@@ -382,58 +467,44 @@ async def get_purchasing_power_proxy(
 
     radius_m = max(
         1000,
-        min(
-            radius_m,
-            10000
-        )
+        min(radius_m, 10000),
     )
 
     # --------------------------------------------------------
-    # OpenStreetMap / Overpass query
+    # Overpass query
     # --------------------------------------------------------
 
     query = f"""
     [out:json][timeout:30];
 
     (
-      node["amenity"="bank"]
-        (around:{radius_m},{latitude},{longitude});
+        nwr["amenity"="bank"]
+            (around:{radius_m},{latitude},{longitude});
 
-      way["amenity"="bank"]
-        (around:{radius_m},{latitude},{longitude});
+        nwr["amenity"="atm"]
+            (around:{radius_m},{latitude},{longitude});
 
-      node["amenity"="atm"]
-        (around:{radius_m},{latitude},{longitude});
+        nwr["shop"="supermarket"]
+            (around:{radius_m},{latitude},{longitude});
 
-      way["amenity"="atm"]
-        (around:{radius_m},{latitude},{longitude});
+        nwr["amenity"="marketplace"]
+            (around:{radius_m},{latitude},{longitude});
 
-      node["shop"="supermarket"]
-        (around:{radius_m},{latitude},{longitude});
-
-      way["shop"="supermarket"]
-        (around:{radius_m},{latitude},{longitude});
-
-      node["amenity"="marketplace"]
-        (around:{radius_m},{latitude},{longitude});
-
-      way["amenity"="marketplace"]
-        (around:{radius_m},{latitude},{longitude});
-
-      node["shop"="department_store"]
-        (around:{radius_m},{latitude},{longitude});
-
-      way["shop"="department_store"]
-        (around:{radius_m},{latitude},{longitude});
+        nwr["shop"="department_store"]
+            (around:{radius_m},{latitude},{longitude});
     );
 
     out center;
     """
 
+    # --------------------------------------------------------
+    # Call Overpass
+    # --------------------------------------------------------
+
     try:
 
         async with httpx.AsyncClient(
-            timeout=40.0
+            timeout=45.0
         ) as client:
 
             response = await client.post(
@@ -445,10 +516,31 @@ async def get_purchasing_power_proxy(
 
             data = response.json()
 
+        if not isinstance(data, dict):
+
+            return {
+
+                "success": False,
+
+                "purchasing_power":
+                    None,
+
+                "purchasing_power_proxy":
+                    None,
+
+                "message":
+                    "Invalid OpenStreetMap response.",
+
+            }
+
         elements = data.get(
             "elements",
-            []
+            [],
         )
+
+        if not isinstance(elements, list):
+
+            elements = []
 
         # ----------------------------------------------------
         # Counters
@@ -461,7 +553,7 @@ async def get_purchasing_power_proxy(
         department_stores = 0
 
         # ----------------------------------------------------
-        # Weighted economic activity
+        # Weighted activity score
         # ----------------------------------------------------
 
         weighted_score = 0.0
@@ -480,7 +572,6 @@ async def get_purchasing_power_proxy(
             )
 
             if element_id in seen:
-
                 continue
 
             seen.add(
@@ -489,20 +580,23 @@ async def get_purchasing_power_proxy(
 
             tags = element.get(
                 "tags",
-                {}
+                {},
             )
 
+            if not isinstance(tags, dict):
+                tags = {}
+
             # ------------------------------------------------
-            # Get coordinates
+            # Coordinates
             # ------------------------------------------------
 
             if element.get("type") == "node":
 
-                lat = element.get(
+                place_lat = element.get(
                     "lat"
                 )
 
-                lon = element.get(
+                place_lon = element.get(
                     "lon"
                 )
 
@@ -510,59 +604,56 @@ async def get_purchasing_power_proxy(
 
                 center = element.get(
                     "center",
-                    {}
+                    {},
                 )
 
-                lat = center.get(
+                place_lat = center.get(
                     "lat"
                 )
 
-                lon = center.get(
+                place_lon = center.get(
                     "lon"
                 )
 
-            if lat is None or lon is None:
-
+            if (
+                place_lat is None
+                or place_lon is None
+            ):
                 continue
 
             try:
 
-                lat = float(lat)
-                lon = float(lon)
+                place_lat = float(
+                    place_lat
+                )
+
+                place_lon = float(
+                    place_lon
+                )
 
             except (
                 TypeError,
-                ValueError
+                ValueError,
             ):
 
                 continue
 
             # ------------------------------------------------
-            # Calculate actual distance
+            # Actual distance
             # ------------------------------------------------
 
             distance_m = calculate_distance(
                 latitude,
                 longitude,
-                lat,
-                lon,
+                place_lat,
+                place_lon,
             )
 
-            # ------------------------------------------------
-            # Safety check
-            # ------------------------------------------------
-
             if distance_m > radius_m:
-
                 continue
 
             # ------------------------------------------------
-            # Distance weighting
-            #
-            # 0 - 1 km   = 100%
-            # 1 - 3 km   = 70%
-            # 3 - 7 km   = 45%
-            # 7 - 10 km  = 25%
+            # Distance weight
             # ------------------------------------------------
 
             if distance_m <= 1000:
@@ -582,56 +673,45 @@ async def get_purchasing_power_proxy(
                 distance_weight = 0.25
 
             # ------------------------------------------------
-            # Economic category weight
+            # Category weight
             # ------------------------------------------------
 
-            if tags.get(
+            amenity = tags.get(
                 "amenity"
-            ) == "bank":
+            )
+
+            shop = tags.get(
+                "shop"
+            )
+
+            if amenity == "bank":
 
                 banks += 1
-
                 category_weight = 8
 
-            elif tags.get(
-                "amenity"
-            ) == "atm":
+            elif amenity == "atm":
 
                 atms += 1
-
                 category_weight = 2
 
-            elif tags.get(
-                "shop"
-            ) == "supermarket":
+            elif shop == "supermarket":
 
                 supermarkets += 1
-
                 category_weight = 8
 
-            elif tags.get(
-                "amenity"
-            ) == "marketplace":
+            elif amenity == "marketplace":
 
                 marketplaces += 1
-
                 category_weight = 5
 
-            elif tags.get(
-                "shop"
-            ) == "department_store":
+            elif shop == "department_store":
 
                 department_stores += 1
-
                 category_weight = 10
 
             else:
 
                 continue
-
-            # ------------------------------------------------
-            # Add distance-adjusted contribution
-            # ------------------------------------------------
 
             weighted_score += (
                 category_weight
@@ -639,20 +719,55 @@ async def get_purchasing_power_proxy(
             )
 
         # ----------------------------------------------------
-        # Convert score to 0-100
+        # Total mapped economic locations
         # ----------------------------------------------------
 
-        proxy_score = min(
-            100,
-            max(
-                0,
-                weighted_score
+        total_activity = (
+            banks
+            + atms
+            + supermarkets
+            + marketplaces
+            + department_stores
+        )
+
+        # ----------------------------------------------------
+        # Convert activity into 0-100 score
+        #
+        # This prevents the score from being fixed.
+        # The score changes according to the actual
+        # OSM activity around the selected location.
+        # ----------------------------------------------------
+
+        if weighted_score <= 0:
+
+            proxy_score = 0.0
+
+        else:
+
+            # Smooth saturation:
+            # more activity increases score,
+            # but score cannot exceed 100.
+            proxy_score = (
+                100
+                * (
+                    1
+                    - math.exp(
+                        -weighted_score / 55
+                    )
+                )
             )
+
+        proxy_score = max(
+            0.0,
+            min(
+                proxy_score,
+                100.0,
+            ),
         )
 
         proxy_score = round(
             proxy_score,
-            2
+            2,
         )
 
         # ----------------------------------------------------
@@ -676,18 +791,42 @@ async def get_purchasing_power_proxy(
             level = "VERY LOW"
 
         # ----------------------------------------------------
-        # Return result
+        # Return
         # ----------------------------------------------------
 
         return {
 
             "success": True,
 
+            # Main field
+            "purchasing_power":
+                proxy_score,
+
+            # Backward-compatible field
             "purchasing_power_proxy":
                 proxy_score,
 
+            "purchasing_power_unit":
+                "score / 100",
+
             "purchasing_power_level":
                 level,
+
+            "purchasing_power_proxy_based":
+                True,
+
+            "purchasing_power_data_source":
+                "OpenStreetMap / Overpass",
+
+            "purchasing_power_radius_km":
+                round(
+                    radius_m / 1000,
+                    2,
+                ),
+
+            # ------------------------------------------------
+            # Economic activity
+            # ------------------------------------------------
 
             "economic_activity": {
 
@@ -706,21 +845,32 @@ async def get_purchasing_power_proxy(
                 "department_stores":
                     department_stores,
 
+                "total_activity":
+                    total_activity,
+
+                "weighted_activity":
+                    round(
+                        weighted_score,
+                        2,
+                    ),
+
             },
 
-            "purchasing_power_data_source":
-                "OpenStreetMap / Overpass",
+            # ------------------------------------------------
+            # Useful aliases for frontend
+            # ------------------------------------------------
 
-            "purchasing_power_radius_km":
-                radius_m / 1000,
+            "local_business_count":
+                total_activity,
 
             "purchasing_power_note":
-                "Proxy based on mapped local "
-                "economic and commercial activity "
-                "within up to 10 km. Businesses "
-                "closer to the selected location "
-                "receive greater weight. This is "
-                "not a direct household income estimate.",
+                (
+                    "This is a location-based proxy "
+                    "using mapped economic and "
+                    "commercial activity within "
+                    "the selected radius. It is "
+                    "not direct household income."
+                ),
 
         }
 
@@ -734,6 +884,9 @@ async def get_purchasing_power_proxy(
 
             "success": False,
 
+            "purchasing_power":
+                None,
+
             "purchasing_power_proxy":
                 None,
 
@@ -746,12 +899,15 @@ async def get_purchasing_power_proxy(
 
         print(
             "Overpass HTTP error:",
-            e.response.status_code
+            e.response.status_code,
         )
 
         return {
 
             "success": False,
+
+            "purchasing_power":
+                None,
 
             "purchasing_power_proxy":
                 None,
@@ -765,12 +921,15 @@ async def get_purchasing_power_proxy(
 
         print(
             "Overpass error:",
-            e
+            repr(e),
         )
 
         return {
 
             "success": False,
+
+            "purchasing_power":
+                None,
 
             "purchasing_power_proxy":
                 None,
@@ -782,7 +941,7 @@ async def get_purchasing_power_proxy(
 
 
 # ============================================================
-# COMBINED LOCATION INSIGHTS
+# COMPLETE LOCATION INSIGHTS
 # ============================================================
 
 async def get_location_insights(
@@ -790,21 +949,18 @@ async def get_location_insights(
     longitude: float,
 ):
     """
-    Get population density and purchasing-power proxy
-    for the selected location.
-
-    Purchasing-power analysis considers economic
-    activity up to 10 km away.
+    Get population density and purchasing-power
+    proxy for the selected location.
     """
 
     # --------------------------------------------------------
-    # Run both services concurrently
+    # Run both APIs at the same time
     # --------------------------------------------------------
 
     population_task = (
         get_population_density(
             latitude,
-            longitude
+            longitude,
         )
     )
 
@@ -831,10 +987,12 @@ async def get_location_insights(
 
         "success":
             population_result.get(
-                "success"
+                "success",
+                False,
             )
             or purchasing_result.get(
-                "success"
+                "success",
+                False,
             ),
 
         # ====================================================
@@ -846,6 +1004,27 @@ async def get_location_insights(
                 "population_density"
             ),
 
+        "population_density_actual":
+            population_result.get(
+                "population_density_actual"
+            ),
+
+        "population_density_unit":
+            population_result.get(
+                "population_density_unit",
+                "people/km²",
+            ),
+
+        "population_density_score":
+            population_result.get(
+                "population_density_score"
+            ),
+
+        "population_density_level":
+            population_result.get(
+                "population_density_level"
+            ),
+
         "population_estimate":
             population_result.get(
                 "population_estimate"
@@ -853,7 +1032,7 @@ async def get_location_insights(
 
         "population_area_km2":
             population_result.get(
-                "area_km2"
+                "population_area_km2"
             ),
 
         "population_data_year":
@@ -864,13 +1043,20 @@ async def get_location_insights(
         "population_data_source":
             population_result.get(
                 "population_data_source",
-                "WorldPop"
+                "WorldPop",
             ),
 
         # ====================================================
         # PURCHASING POWER
         # ====================================================
 
+        # Main frontend field
+        "purchasing_power":
+            purchasing_result.get(
+                "purchasing_power"
+            ),
+
+        # Old field retained for compatibility
         "purchasing_power_proxy":
             purchasing_result.get(
                 "purchasing_power_proxy"
@@ -881,10 +1067,10 @@ async def get_location_insights(
                 "purchasing_power_level"
             ),
 
-        "economic_activity":
+        "purchasing_power_unit":
             purchasing_result.get(
-                "economic_activity",
-                {}
+                "purchasing_power_unit",
+                "score / 100",
             ),
 
         "purchasing_power_data_source":
@@ -900,6 +1086,22 @@ async def get_location_insights(
         "purchasing_power_note":
             purchasing_result.get(
                 "purchasing_power_note"
+            ),
+
+        # ====================================================
+        # ECONOMIC ACTIVITY
+        # ====================================================
+
+        "economic_activity":
+            purchasing_result.get(
+                "economic_activity",
+                {},
+            ),
+
+        "local_business_count":
+            purchasing_result.get(
+                "local_business_count",
+                0,
             ),
 
     }
