@@ -1,0 +1,6 @@
+{
+  "name": "VyaparDisha - Financial and Scheme Planning",
+  "description": "Module 2: Financial and Scheme Planning for VyaparDisha. MSME government scheme matching, financial summary, and repayment stress assessment.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
